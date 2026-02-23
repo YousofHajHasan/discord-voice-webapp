@@ -9,7 +9,7 @@ from pathlib import Path
 from auth import get_discord_oauth_url, exchange_code, get_discord_user
 from database import init_db, upsert_user, get_user, log_audio_file
 
-app = FastAPI(root_path="/recordings")
+app = FastAPI()
 
 app.add_middleware(
     SessionMiddleware,
@@ -50,7 +50,7 @@ def get_current_user(request: Request):
 async def index(request: Request):
     user = get_current_user(request)
     if user:
-        return RedirectResponse("/dashboard")
+        return RedirectResponse("/recordings/dashboard")
     return templates.TemplateResponse("login.html", {"request": request})
 
 
@@ -63,15 +63,15 @@ async def login():
 @app.get("/callback")
 async def callback(request: Request, code: str = None, error: str = None):
     if error or not code:
-        return RedirectResponse("/")
+        return RedirectResponse("/recordings/")
 
     token_data = await exchange_code(code)
     if not token_data:
-        return RedirectResponse("/")
+        return RedirectResponse("/recordings/")
 
     discord_user = await get_discord_user(token_data["access_token"])
     if not discord_user:
-        return RedirectResponse("/")
+        return RedirectResponse("/recordings/")
 
     discord_id = discord_user["id"]
     username = discord_user["username"]
@@ -86,7 +86,7 @@ async def callback(request: Request, code: str = None, error: str = None):
         "avatar": avatar_url
     }
 
-    return RedirectResponse("/dashboard")
+    return RedirectResponse("/recordings/dashboard")
 
 
 @app.get("/dashboard", response_class=HTMLResponse)
@@ -177,4 +177,4 @@ async def serve_audio(user_id: str, request: Request):
 @app.get("/logout")
 async def logout(request: Request):
     request.session.clear()
-    return RedirectResponse("/")
+    return RedirectResponse("/recordings/")
