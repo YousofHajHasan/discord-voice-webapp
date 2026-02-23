@@ -15,7 +15,8 @@ app.add_middleware(
     SessionMiddleware,
     secret_key=os.environ["SESSION_SECRET"],
     https_only=True,
-    same_site="lax"
+    same_site="lax",
+    max_age=604800
 )
 
 templates = Jinja2Templates(directory="templates")
