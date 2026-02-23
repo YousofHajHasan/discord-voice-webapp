@@ -1,0 +1,236 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Voice Recordings</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;700;800&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet">
+    <style>
+        *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+        :root {
+            --bg: #0a0a0f;
+            --surface: #111118;
+            --border: #1e1e2e;
+            --accent: #5865f2;
+            --accent-glow: rgba(88, 101, 242, 0.3);
+            --text: #e8e8f0;
+            --muted: #5a5a7a;
+            --waveform: #5865f2;
+        }
+
+        body {
+            background: var(--bg);
+            color: var(--text);
+            font-family: 'DM Mono', monospace;
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            overflow: hidden;
+            position: relative;
+        }
+
+        /* Animated background grid */
+        body::before {
+            content: '';
+            position: fixed;
+            inset: 0;
+            background-image:
+                linear-gradient(rgba(88, 101, 242, 0.03) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(88, 101, 242, 0.03) 1px, transparent 1px);
+            background-size: 60px 60px;
+            animation: gridDrift 20s linear infinite;
+        }
+
+        @keyframes gridDrift {
+            0% { transform: translateY(0); }
+            100% { transform: translateY(60px); }
+        }
+
+        /* Floating orbs */
+        .orb {
+            position: fixed;
+            border-radius: 50%;
+            filter: blur(80px);
+            opacity: 0.15;
+            animation: orbFloat 8s ease-in-out infinite;
+        }
+        .orb-1 {
+            width: 400px; height: 400px;
+            background: var(--accent);
+            top: -100px; left: -100px;
+            animation-delay: 0s;
+        }
+        .orb-2 {
+            width: 300px; height: 300px;
+            background: #7c3aed;
+            bottom: -50px; right: -50px;
+            animation-delay: -4s;
+        }
+
+        @keyframes orbFloat {
+            0%, 100% { transform: translate(0, 0) scale(1); }
+            50% { transform: translate(20px, 20px) scale(1.05); }
+        }
+
+        .card {
+            position: relative;
+            z-index: 10;
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 24px;
+            padding: 56px 48px;
+            width: 100%;
+            max-width: 420px;
+            text-align: center;
+            box-shadow: 0 0 60px rgba(88, 101, 242, 0.08), 0 24px 48px rgba(0,0,0,0.5);
+            animation: cardIn 0.6s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+            opacity: 0;
+            transform: translateY(24px);
+        }
+
+        @keyframes cardIn {
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        .waveform {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 4px;
+            margin-bottom: 36px;
+            height: 48px;
+        }
+
+        .waveform-bar {
+            width: 3px;
+            background: var(--accent);
+            border-radius: 2px;
+            animation: wave 1.2s ease-in-out infinite;
+            opacity: 0.7;
+        }
+
+        .waveform-bar:nth-child(1)  { height: 16px; animation-delay: 0s; }
+        .waveform-bar:nth-child(2)  { height: 28px; animation-delay: 0.1s; }
+        .waveform-bar:nth-child(3)  { height: 40px; animation-delay: 0.2s; }
+        .waveform-bar:nth-child(4)  { height: 32px; animation-delay: 0.3s; }
+        .waveform-bar:nth-child(5)  { height: 48px; animation-delay: 0.4s; }
+        .waveform-bar:nth-child(6)  { height: 36px; animation-delay: 0.5s; }
+        .waveform-bar:nth-child(7)  { height: 44px; animation-delay: 0.4s; }
+        .waveform-bar:nth-child(8)  { height: 28px; animation-delay: 0.3s; }
+        .waveform-bar:nth-child(9)  { height: 20px; animation-delay: 0.2s; }
+        .waveform-bar:nth-child(10) { height: 12px; animation-delay: 0.1s; }
+
+        @keyframes wave {
+            0%, 100% { transform: scaleY(0.4); opacity: 0.4; }
+            50% { transform: scaleY(1); opacity: 1; }
+        }
+
+        h1 {
+            font-family: 'Syne', sans-serif;
+            font-size: 28px;
+            font-weight: 800;
+            letter-spacing: -0.5px;
+            margin-bottom: 8px;
+            color: var(--text);
+        }
+
+        .subtitle {
+            color: var(--muted);
+            font-size: 13px;
+            line-height: 1.6;
+            margin-bottom: 40px;
+        }
+
+        .login-btn {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 12px;
+            background: var(--accent);
+            color: #fff;
+            text-decoration: none;
+            border-radius: 14px;
+            padding: 16px 24px;
+            font-family: 'Syne', sans-serif;
+            font-weight: 700;
+            font-size: 15px;
+            letter-spacing: 0.3px;
+            transition: all 0.2s ease;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .login-btn::before {
+            content: '';
+            position: absolute;
+            inset: 0;
+            background: linear-gradient(135deg, rgba(255,255,255,0.1), transparent);
+            opacity: 0;
+            transition: opacity 0.2s;
+        }
+
+        .login-btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 8px 30px var(--accent-glow);
+        }
+
+        .login-btn:hover::before { opacity: 1; }
+        .login-btn:active { transform: translateY(0); }
+
+        .discord-icon {
+            width: 22px;
+            height: 22px;
+            fill: white;
+            flex-shrink: 0;
+        }
+
+        .footer-note {
+            margin-top: 28px;
+            font-size: 11px;
+            color: var(--muted);
+            line-height: 1.6;
+        }
+
+        .footer-note span {
+            color: var(--accent);
+        }
+    </style>
+</head>
+<body>
+    <div class="orb orb-1"></div>
+    <div class="orb orb-2"></div>
+
+    <div class="card">
+        <div class="waveform">
+            <div class="waveform-bar"></div>
+            <div class="waveform-bar"></div>
+            <div class="waveform-bar"></div>
+            <div class="waveform-bar"></div>
+            <div class="waveform-bar"></div>
+            <div class="waveform-bar"></div>
+            <div class="waveform-bar"></div>
+            <div class="waveform-bar"></div>
+            <div class="waveform-bar"></div>
+            <div class="waveform-bar"></div>
+        </div>
+
+        <h1>Your Recordings</h1>
+        <p class="subtitle">Sign in with your Discord account to<br>access your personal voice recordings.</p>
+
+        <a href="/login" class="login-btn">
+            <svg class="discord-icon" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                <path d="M20.317 4.37a19.791 19.791 0 0 0-4.885-1.515.074.074 0 0 0-.079.037c-.21.375-.444.864-.608 1.25a18.27 18.27 0 0 0-5.487 0 12.64 12.64 0 0 0-.617-1.25.077.077 0 0 0-.079-.037A19.736 19.736 0 0 0 3.677 4.37a.07.07 0 0 0-.032.027C.533 9.046-.32 13.58.099 18.057c.002.022.015.043.031.056a19.9 19.9 0 0 0 5.993 3.03.078.078 0 0 0 .084-.028 14.09 14.09 0 0 0 1.226-1.994.076.076 0 0 0-.041-.106 13.107 13.107 0 0 1-1.872-.892.077.077 0 0 1-.008-.128 10.2 10.2 0 0 0 .372-.292.074.074 0 0 1 .077-.01c3.928 1.793 8.18 1.793 12.062 0a.074.074 0 0 1 .078.01c.12.098.246.198.373.292a.077.077 0 0 1-.006.127 12.299 12.299 0 0 1-1.873.892.077.077 0 0 0-.041.107c.36.698.772 1.362 1.225 1.993a.076.076 0 0 0 .084.028 19.839 19.839 0 0 0 6.002-3.03.077.077 0 0 0 .032-.054c.5-5.177-.838-9.674-3.549-13.66a.061.061 0 0 0-.031-.03z"/>
+            </svg>
+            Continue with Discord
+        </a>
+
+        <p class="footer-note">
+            Only <span>your own</span> recordings are accessible.<br>
+            No data is shared with third parties.
+        </p>
+    </div>
+</body>
+</html>
