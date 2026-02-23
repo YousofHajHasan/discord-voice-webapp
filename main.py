@@ -1,15 +1,20 @@
 import os
+import logging
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse
 from fastapi.templating import Jinja2Templates
-from starlette.middleware.trustedhost import TrustedHostMiddleware
 from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 from starlette.middleware.sessions import SessionMiddleware
 from pathlib import Path
 
-
 from auth import get_discord_oauth_url, exchange_code, get_discord_user
 from database import init_db, upsert_user, get_user, log_audio_file
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(levelname)s - %(message)s"
+)
+logger = logging.getLogger(__name__)
 
 app = FastAPI(root_path="/recordings")
 app.add_middleware(ProxyHeadersMiddleware, trusted_hosts="*")
@@ -19,7 +24,7 @@ app.add_middleware(
     secret_key=os.environ["SESSION_SECRET"],
     https_only=True,
     same_site="lax",
-    max_age=604800
+    max_age=604800  # 7 days
 )
 
 templates = Jinja2Templates(directory="templates")
@@ -30,7 +35,6 @@ RECORDINGS_PATH = Path(os.environ.get("RECORDINGS_PATH", "/app/recordings"))
 @app.on_event("startup")
 async def startup():
     init_db()
-    # Index existing recordings into DB
     if RECORDINGS_PATH.exists():
         for user_dir in RECORDINGS_PATH.iterdir():
             if user_dir.is_dir():
@@ -90,6 +94,7 @@ async def callback(request: Request, code: str = None, error: str = None):
         "avatar": avatar_url
     }
 
+    logger.info(f"User logged in: {username} ({discord_id})")
     return RedirectResponse("/recordings/dashboard")
 
 
@@ -97,9 +102,8 @@ async def callback(request: Request, code: str = None, error: str = None):
 async def dashboard(request: Request):
     user = get_current_user(request)
     if not user:
-        return RedirectResponse("/")
+        return RedirectResponse("/recordings/")
 
-    # Find their recording folder
     recording_exists = False
     if RECORDINGS_PATH.exists():
         for user_dir in RECORDINGS_PATH.iterdir():
@@ -120,11 +124,14 @@ async def dashboard(request: Request):
 async def serve_audio(user_id: str, request: Request):
     current_user = get_current_user(request)
     if not current_user:
+        logger.warning(f"Unauthenticated audio access attempt for user_id={user_id}")
         raise HTTPException(status_code=401, detail="Unauthorized")
 
-    # Users can only access their own audio
     if current_user["id"] != user_id:
+        logger.warning(f"Forbidden: {current_user['username']} ({current_user['id']}) tried to access audio of {user_id}")
         raise HTTPException(status_code=403, detail="Forbidden")
+
+    logger.info(f"Audio served to: {current_user['username']} ({current_user['id']})")
 
     audio_file = None
     if RECORDINGS_PATH.exists():
@@ -180,5 +187,8 @@ async def serve_audio(user_id: str, request: Request):
 
 @app.get("/logout")
 async def logout(request: Request):
+    user = get_current_user(request)
+    if user:
+        logger.info(f"User logged out: {user['username']} ({user['id']})")
     request.session.clear()
     return RedirectResponse("/recordings/")
