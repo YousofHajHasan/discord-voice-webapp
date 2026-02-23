@@ -1,15 +1,17 @@
-import os
-from fastapi import FastAPI, Request, Depends, HTTPException
+from fastapi import FastAPI, Request, HTTPException
 from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse
 from fastapi.templating import Jinja2Templates
-from fastapi.staticfiles import StaticFiles
+from starlette.middleware.trustedhost import TrustedHostMiddleware
+from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 from starlette.middleware.sessions import SessionMiddleware
 from pathlib import Path
+
 
 from auth import get_discord_oauth_url, exchange_code, get_discord_user
 from database import init_db, upsert_user, get_user, log_audio_file
 
-app = FastAPI()
+app = FastAPI(root_path="/recordings")
+app.add_middleware(ProxyHeadersMiddleware, trusted_hosts="*")
 
 app.add_middleware(
     SessionMiddleware,
