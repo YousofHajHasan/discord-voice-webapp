@@ -342,7 +342,7 @@
         <div class="user-info">
             <img src="{{ user.avatar }}" alt="{{ user.username }}" class="avatar">
             <span class="username">Logged in as <span>{{ user.username }}</span></span>
-            <a href="/logout" class="logout-btn">Logout</a>
+            <a href="/recordings/logout" class="logout-btn">Logout</a>
         </div>
     </header>
 
@@ -389,7 +389,7 @@
             </div>
         </div>
 
-        <audio id="audioPlayer" src="/audio/{{ user.id }}" preload="metadata"></audio>
+        <audio id="audioPlayer" src="/recordings/audio/{{ user.id }}" preload="metadata"></audio>
 
         {% else %}
         <div class="recording-card">
