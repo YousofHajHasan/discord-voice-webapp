@@ -1,0 +1,29 @@
+version: "3.9"
+
+services:
+  bot:
+    image: yousofhajhasan24/discord-voice-recorder:latest
+    container_name: discord-bot
+    restart: always
+    env_file: /root/.env
+    volumes:
+      - /root/recordings/recordings:/app/recordings
+    networks:
+      - internal
+
+  web:
+    image: yousofhajhasan24/discord-recordings-web:latest
+    container_name: discord-web
+    restart: always
+    env_file: /root/.env
+    ports:
+      - "5140:8000"
+    volumes:
+      - /root/recordings/recordings:/app/recordings:ro
+      - /root/recordings/db:/app/db
+    networks:
+      - internal
+
+networks:
+  internal:
+    driver: bridge
