@@ -9,7 +9,7 @@ from pathlib import Path
 from auth import get_discord_oauth_url, exchange_code, get_discord_user
 from database import init_db, upsert_user, get_user, log_audio_file
 
-app = FastAPI()
+app = FastAPI(root_path="/recordings")
 
 app.add_middleware(
     SessionMiddleware,
