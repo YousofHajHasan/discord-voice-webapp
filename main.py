@@ -8,7 +8,7 @@ from starlette.middleware.sessions import SessionMiddleware
 from pathlib import Path
 
 from auth import get_discord_oauth_url, exchange_code, get_discord_user
-from database import init_db, upsert_user, get_user, log_audio_file
+from database import init_db, upsert_user, log_audio_file
 
 logging.basicConfig(
     level=logging.INFO,
@@ -42,9 +42,9 @@ async def startup():
                 if len(parts) == 2:
                     discord_id = parts[1]
                     username = parts[0]
-                    audio_file = user_dir / "Full_Recording.mp3"
-                    if audio_file.exists():
-                        log_audio_file(discord_id, username, str(audio_file))
+                    for f in user_dir.iterdir():
+                        if f.suffix == ".mp3":
+                            log_audio_file(discord_id, username, str(f))
 
 
 def get_current_user(request: Request):
@@ -52,6 +52,27 @@ def get_current_user(request: Request):
     if not user:
         return None
     return user
+
+
+def get_user_recordings(user_id: str):
+    """Returns (full_recording_path, dated_recordings_sorted_newest_first)"""
+    full_recording = None
+    dated_recordings = []
+
+    if RECORDINGS_PATH.exists():
+        for user_dir in RECORDINGS_PATH.iterdir():
+            if user_dir.name.endswith(f"_{user_id}"):
+                for f in user_dir.iterdir():
+                    if f.suffix == ".mp3":
+                        if f.name == "Full_Recording.mp3":
+                            full_recording = f.name
+                        else:
+                            dated_recordings.append(f.name)
+                break
+
+    # Sort newest first (filenames are YYYY-MM-DD.mp3 so lexicographic sort works)
+    dated_recordings.sort(reverse=True)
+    return full_recording, dated_recordings
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -104,24 +125,18 @@ async def dashboard(request: Request):
     if not user:
         return RedirectResponse("/recordings/")
 
-    recording_exists = False
-    if RECORDINGS_PATH.exists():
-        for user_dir in RECORDINGS_PATH.iterdir():
-            if user_dir.name.endswith(f"_{user['id']}"):
-                audio_file = user_dir / "Full_Recording.mp3"
-                if audio_file.exists():
-                    recording_exists = True
-                break
+    full_recording, dated_recordings = get_user_recordings(user["id"])
 
     return templates.TemplateResponse("dashboard.html", {
         "request": request,
         "user": user,
-        "recording_exists": recording_exists
+        "full_recording": full_recording,
+        "dated_recordings": dated_recordings,
     })
 
 
-@app.get("/audio/{user_id}")
-async def serve_audio(user_id: str, request: Request):
+@app.get("/audio/{user_id}/{filename}")
+async def serve_audio(user_id: str, filename: str, request: Request):
     current_user = get_current_user(request)
     if not current_user:
         logger.warning(f"Unauthenticated audio access attempt for user_id={user_id}")
@@ -131,19 +146,23 @@ async def serve_audio(user_id: str, request: Request):
         logger.warning(f"Forbidden: {current_user['username']} ({current_user['id']}) tried to access audio of {user_id}")
         raise HTTPException(status_code=403, detail="Forbidden")
 
-    logger.info(f"Audio served to: {current_user['username']} ({current_user['id']})")
+    # Security: prevent path traversal
+    if "/" in filename or ".." in filename:
+        raise HTTPException(status_code=400, detail="Invalid filename")
 
     audio_file = None
     if RECORDINGS_PATH.exists():
         for user_dir in RECORDINGS_PATH.iterdir():
             if user_dir.name.endswith(f"_{user_id}"):
-                candidate = user_dir / "Full_Recording.mp3"
+                candidate = user_dir / filename
                 if candidate.exists():
                     audio_file = candidate
                 break
 
     if not audio_file:
         raise HTTPException(status_code=404, detail="Recording not found")
+
+    logger.info(f"Audio served to: {current_user['username']} ({current_user['id']}) - {filename}")
 
     file_size = audio_file.stat().st_size
     range_header = request.headers.get("range")
