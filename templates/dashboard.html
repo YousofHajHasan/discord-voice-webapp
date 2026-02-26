@@ -533,13 +533,7 @@
         });
 
         section.innerHTML = html;
-
-        // Pre-load durations for all chunks
-        dates.forEach(date => {
-            (data[date] || []).forEach((name, idx) => {
-                getChunkAudio(date, name, idx);
-            });
-        });
+        // Durations are loaded lazily when the user clicks a chunk — no pre-load.
     }
 
     // ── Live polling ──────────────────────────────────────────────────────────
