@@ -11,6 +11,26 @@ services:
     networks:
       - internal
 
+  vad:
+    image: yousofhajhasan24/discord-vad-processor:latest
+    container_name: discord-vad
+    restart: always
+    environment:
+      RECORDINGS_PATH: /app/recordings
+      POLL_INTERVAL: "30"
+      STABILITY_WINDOW: "30"
+      VAD_THRESHOLD: "0.5"
+      SILENCE_SEC: "1.0"
+      MIN_SPEECH_MS: "250"
+      SPEECH_PAD_MS: "30"
+    volumes:
+      - /root/recordings/recordings:/app/recordings
+      - /root/recordings/vad-state:/app/processed.json
+    networks:
+      - internal
+    depends_on:
+      - bot
+
   web:
     image: yousofhajhasan24/discord-recordings-web:latest
     container_name: discord-web
@@ -19,10 +39,12 @@ services:
     ports:
       - "5140:8000"
     volumes:
-      - /root/recordings/recordings:/app/recordings:ro
+      - /root/recordings/recordings:/app/recordings
       - /root/recordings/db:/app/db
     networks:
       - internal
+    depends_on:
+      - vad
 
 networks:
   internal:

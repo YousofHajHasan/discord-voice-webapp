@@ -14,11 +14,15 @@
             --accent: #5865f2; --accent-glow: rgba(88,101,242,0.25); --accent-subtle: rgba(88,101,242,0.08);
             --text: #e8e8f0; --muted: #5a5a7a;
             --gold: #f59e0b; --gold-subtle: rgba(245,158,11,0.08);
+            --green: #22c55e; --green-subtle: rgba(34,197,94,0.08);
         }
+        *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
         body { background: var(--bg); color: var(--text); font-family: 'DM Mono', monospace; min-height: 100vh; }
         body::before {
             content: ''; position: fixed; inset: 0;
-            background-image: linear-gradient(rgba(88,101,242,0.02) 1px, transparent 1px), linear-gradient(90deg,rgba(88,101,242,0.02) 1px,transparent 1px);
+            background-image:
+                linear-gradient(rgba(88,101,242,0.02) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(88,101,242,0.02) 1px, transparent 1px);
             background-size: 60px 60px; pointer-events: none;
         }
         header {
@@ -29,8 +33,8 @@
             display: flex; align-items: center; justify-content: space-between;
         }
         .logo { font-family: 'Syne', sans-serif; font-weight: 800; font-size: 18px; display: flex; align-items: center; gap: 10px; }
-        .logo-dot { width: 8px; height: 8px; background: var(--accent); border-radius: 50%; box-shadow: 0 0 8px var(--accent); animation: pulse 2s ease-in-out infinite; }
-        @keyframes pulse { 0%,100%{opacity:1;transform:scale(1)} 50%{opacity:0.5;transform:scale(0.8)} }
+        .logo-dot { width: 8px; height: 8px; background: var(--accent); border-radius: 50%; box-shadow: 0 0 8px var(--accent); animation: pulse-dot 2s ease-in-out infinite; }
+        @keyframes pulse-dot { 0%,100%{opacity:1;transform:scale(1)} 50%{opacity:0.5;transform:scale(0.8)} }
         .user-info { display: flex; align-items: center; gap: 12px; }
         .avatar { width: 36px; height: 36px; border-radius: 50%; border: 2px solid var(--border); object-fit: cover; }
         .username { font-size: 13px; color: var(--muted); }
@@ -41,14 +45,15 @@
             font-size: 12px; cursor: pointer; text-decoration: none; transition: all 0.2s;
         }
         .logout-btn:hover { border-color: var(--border-hover); color: var(--text); }
-        main { max-width: 800px; margin: 0 auto; padding: 48px 24px; animation: fadeUp 0.5s cubic-bezier(0.16,1,0.3,1) forwards; }
+
+        main { max-width: 860px; margin: 0 auto; padding: 48px 24px; animation: fadeUp 0.5s cubic-bezier(0.16,1,0.3,1) forwards; }
         @keyframes fadeUp { from{opacity:0;transform:translateY(16px)} to{opacity:1;transform:translateY(0)} }
         .page-title { font-family: 'Syne', sans-serif; font-size: 32px; font-weight: 800; margin-bottom: 6px; letter-spacing: -0.5px; }
         .page-subtitle { color: var(--muted); font-size: 13px; margin-bottom: 40px; }
         .section-label { font-size: 11px; text-transform: uppercase; letter-spacing: 1.5px; color: var(--muted); margin-bottom: 12px; }
 
         /* DROPDOWN */
-        .date-select-wrapper { position: relative; }
+        .date-select-wrapper { position: relative; margin-bottom: 16px; }
         .date-select {
             width: 100%; background: var(--surface); border: 1px solid var(--border);
             color: var(--text); font-family: 'DM Mono', monospace; font-size: 13px;
@@ -60,15 +65,13 @@
         .select-arrow { position: absolute; right: 14px; top: 50%; transform: translateY(-50%); pointer-events: none; }
         .select-arrow svg { width: 16px; height: 16px; fill: var(--muted); }
 
-        /* PLAYER CARD */
+        /* PLAYER CARD (full recording) */
         .recording-card {
             background: var(--surface); border: 1px solid var(--border);
-            border-radius: 20px; padding: 24px; margin-top: 16px;
-            display: none;
+            border-radius: 20px; padding: 24px; display: none; margin-bottom: 20px;
         }
         .recording-card.visible { display: block; }
         .recording-card.is-full { border-color: rgba(245,158,11,0.2); }
-
         .card-header { display: flex; align-items: center; gap: 14px; margin-bottom: 20px; }
         .card-icon { width: 40px; height: 40px; border-radius: 12px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
         .full-icon { background: var(--gold-subtle); border: 1px solid rgba(245,158,11,0.2); }
@@ -78,8 +81,6 @@
         .date-icon svg { fill: var(--accent); }
         .card-meta h2 { font-family: 'Syne', sans-serif; font-size: 16px; font-weight: 700; margin-bottom: 2px; }
         .card-meta p { color: var(--muted); font-size: 12px; }
-
-        /* PLAYER */
         .player-container { background: var(--surface-2); border: 1px solid var(--border); border-radius: 12px; padding: 16px 20px; }
         .player-controls { display: flex; align-items: center; gap: 14px; }
         .play-btn {
@@ -107,179 +108,533 @@
         }
         .speed-btn:hover { background: var(--border-hover); color: var(--text); }
 
+        /* CHUNKS SECTION */
+        .chunks-section { display: none; }
+        .chunks-section.visible { display: block; }
+
+        .date-group { margin-bottom: 28px; }
+        .date-group-header {
+            display: flex; align-items: center; justify-content: space-between;
+            margin-bottom: 0;
+        }
+        .date-group-title {
+            font-family: 'Syne', sans-serif; font-size: 15px; font-weight: 700;
+            display: flex; align-items: center; gap: 10px;
+        }
+        .date-group-title .cal-dot {
+            width: 8px; height: 8px; border-radius: 50%;
+            background: var(--accent); box-shadow: 0 0 6px var(--accent);
+        }
+        .badge {
+            font-size: 11px; color: var(--muted);
+            background: var(--surface-2); border: 1px solid var(--border);
+            padding: 3px 10px; border-radius: 20px;
+        }
+        .badge.live {
+            color: var(--green); border-color: rgba(34,197,94,0.25);
+            background: var(--green-subtle);
+            animation: badge-pulse 2s ease-in-out infinite;
+        }
+        @keyframes badge-pulse { 0%,100%{opacity:1} 50%{opacity:0.6} }
+
+        .chunks-list {
+            background: var(--surface); border: 1px solid var(--border);
+            border-radius: 0 0 16px 16px; overflow: hidden;
+            margin-top: 0;
+        }
+        .chunks-list-header {
+            background: var(--surface); border: 1px solid var(--border);
+            border-radius: 16px 16px 0 0; border-bottom: none;
+            padding: 14px 20px;
+            display: flex; align-items: center; justify-content: space-between;
+            margin-top: 8px;
+        }
+
+        .chunk-row {
+            display: flex; align-items: center; gap: 14px;
+            padding: 11px 18px; border-bottom: 1px solid var(--border);
+            cursor: pointer; transition: background 0.15s; user-select: none;
+        }
+        .chunk-row:last-child { border-bottom: none; }
+        .chunk-row:hover { background: var(--surface-2); }
+        .chunk-row.active { background: var(--accent-subtle); border-left: 2px solid var(--accent); padding-left: 16px; }
+
+        .chunk-num { font-size: 11px; color: var(--muted); width: 32px; flex-shrink: 0; text-align: right; }
+        .chunk-play-btn {
+            width: 28px; height: 28px; border-radius: 50%; border: none;
+            flex-shrink: 0; cursor: pointer; transition: all 0.2s;
+            display: flex; align-items: center; justify-content: center;
+            background: var(--green-subtle); border: 1px solid rgba(34,197,94,0.2);
+        }
+        .chunk-play-btn svg { width: 10px; height: 10px; fill: var(--green); }
+        .chunk-play-btn .icon-pause { display: none; }
+        .chunk-play-btn.playing .icon-play { display: none; }
+        .chunk-play-btn.playing .icon-pause { display: block; }
+        .chunk-play-btn.playing { background: var(--green); border-color: var(--green); }
+        .chunk-play-btn.playing svg { fill: white; }
+
+        .chunk-info { flex: 1; min-width: 0; }
+        .chunk-name { font-size: 12px; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .chunk-mini-bar { width: 100%; height: 2px; background: var(--border); border-radius: 1px; margin-top: 5px; }
+        .chunk-mini-fill { height: 100%; background: var(--green); border-radius: 1px; width: 0%; transition: width 0.1s linear; }
+        .chunk-dur { font-size: 11px; color: var(--muted); flex-shrink: 0; min-width: 36px; text-align: right; }
+
+        /* DELETE BUTTON */
+        .chunk-del-btn {
+            width: 26px; height: 26px; border-radius: 6px; border: none;
+            flex-shrink: 0; cursor: pointer; transition: all 0.2s;
+            display: flex; align-items: center; justify-content: center;
+            background: transparent; opacity: 0;
+        }
+        .chunk-del-btn svg { width: 13px; height: 13px; fill: var(--muted); transition: fill 0.15s; }
+        .chunk-row:hover .chunk-del-btn { opacity: 1; }
+        .chunk-del-btn:hover { background: rgba(239,68,68,0.12); }
+        .chunk-del-btn:hover svg { fill: #ef4444; }
+        .chunk-del-btn.confirming { opacity: 1; background: rgba(239,68,68,0.18); }
+        .chunk-del-btn.confirming svg { fill: #ef4444; }
+
+        /* LIVE INDICATOR */
+        .live-row {
+            display: flex; align-items: center; gap: 8px;
+            padding: 10px 18px; font-size: 11px; color: var(--muted);
+            border-top: 1px dashed var(--border);
+        }
+        .live-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--green); animation: pulse-dot 1.5s ease-in-out infinite; }
+
         /* EMPTY */
         .empty-state { text-align: center; padding: 60px 24px; background: var(--surface); border: 1px solid var(--border); border-radius: 20px; }
         .empty-state svg { width: 48px; height: 48px; fill: var(--muted); margin-bottom: 16px; opacity: 0.4; }
         .empty-state h3 { font-family: 'Syne', sans-serif; font-size: 20px; margin-bottom: 8px; color: var(--muted); }
         .empty-state p { color: var(--muted); font-size: 13px; }
+
+        /* SECTION DIVIDER */
+        .section-divider { display: flex; align-items: center; gap: 12px; margin: 32px 0 20px; }
+        .section-divider span { font-family: 'Syne', sans-serif; font-size: 14px; font-weight: 700; white-space: nowrap; }
+        .section-divider::before, .section-divider::after { content:''; flex:1; height:1px; background: var(--border); }
     </style>
 </head>
 <body>
-    <header>
-        <div class="logo"><div class="logo-dot"></div>Recordings</div>
-        <div class="user-info">
-            <img src="{{ user.avatar }}" alt="{{ user.username }}" class="avatar">
-            <span class="username">Logged in as <span>{{ user.username }}</span></span>
-            <a href="/recordings/logout" class="logout-btn">Logout</a>
-        </div>
-    </header>
+<header>
+    <div class="logo"><div class="logo-dot"></div>Recordings</div>
+    <div class="user-info">
+        <img src="{{ user.avatar }}" alt="{{ user.username }}" class="avatar">
+        <span class="username">Logged in as <span>{{ user.username }}</span></span>
+        <a href="/recordings/logout" class="logout-btn">Logout</a>
+    </div>
+</header>
 
-    <main>
-        <h1 class="page-title">Your Recordings</h1>
-        <p class="page-subtitle">All voice recordings associated with your Discord account.</p>
+<main>
+    <h1 class="page-title">Your Recordings</h1>
+    <p class="page-subtitle">All voice recordings associated with your Discord account.</p>
 
-        {% if not full_recording and not dated_recordings %}
-        <div class="empty-state">
-            <svg viewBox="0 0 24 24"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3zm-1 3a1 1 0 0 1 2 0v8a1 1 0 0 1-2 0V4zM5 12H7a5 5 0 0 0 10 0h2a7 7 0 0 1-6 6.93V21h2v2H9v-2h2v-2.07A7 7 0 0 1 5 12z" opacity="0.3"/></svg>
-            <h3>No recordings yet</h3>
-            <p>Your voice recordings will appear here once you've participated in a session.</p>
-        </div>
-        {% else %}
+    {% if not full_recording and not dated_recordings %}
+    <div class="empty-state">
+        <svg viewBox="0 0 24 24"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3zm-1 3a1 1 0 0 1 2 0v8a1 1 0 0 1-2 0V4zM5 12H7a5 5 0 0 0 10 0h2a7 7 0 0 1-6 6.93V21h2v2H9v-2h2v-2.07A7 7 0 0 1 5 12z" opacity="0.3"/></svg>
+        <h3>No recordings yet</h3>
+        <p>Your voice recordings will appear here once you've participated in a session.</p>
+    </div>
+    {% else %}
 
-        <p class="section-label">Select a Recording</p>
-
-        <div class="date-select-wrapper">
-            <select class="date-select" id="recording-select" onchange="onRecordingSelect(this)">
-                <option value="">— Select a recording —</option>
-                {% if full_recording %}
-                <option value="{{ full_recording }}|full">Recordings before 23-02-2026</option>
-                {% endif %}
-                {% for filename in dated_recordings %}
-                <option value="{{ filename }}|date">{{ filename.replace('.mp3', '') }}</option>
-                {% endfor %}
-            </select>
-            <span class="select-arrow"><svg viewBox="0 0 24 24"><path d="M7 10l5 5 5-5z"/></svg></span>
-        </div>
-
-        <!-- Player card — shown after selection -->
-        <div class="recording-card" id="player-card">
-            <div class="card-header">
-                <div class="card-icon" id="card-icon">
-                    <!-- icon injected by JS -->
-                </div>
-                <div class="card-meta">
-                    <h2 id="card-label">—</h2>
-                    <p id="card-sublabel">—</p>
-                </div>
+    <!-- ── FULL RECORDING (legacy) ── -->
+    {% if full_recording %}
+    <p class="section-label">Legacy Recording</p>
+    <div class="recording-card is-full visible" id="card-full">
+        <div class="card-header">
+            <div class="card-icon full-icon">
+                <svg viewBox="0 0 24 24"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3zm-1 3a1 1 0 0 1 2 0v8a1 1 0 0 1-2 0V4zm-4 8a5 5 0 0 0 10 0h2a7 7 0 0 1-6 6.93V21h2v2H9v-2h2v-2.07A7 7 0 0 1 5 12H7z"/></svg>
             </div>
-            <div class="player-container">
-                <div class="player-controls">
-                    <button class="play-btn" id="play-btn" onclick="togglePlay()">
-                        <svg class="icon-play" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>
+            <div class="card-meta">
+                <h2>Recordings before 23-02-2026</h2>
+                <p>Merged voice sessions</p>
+            </div>
+        </div>
+        <div class="player-container">
+            <div class="player-controls">
+                <button class="play-btn full-btn" id="play-full" onclick="toggleMainPlayer('full')">
+                    <svg class="icon-play" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>
+                    <svg class="icon-pause" viewBox="0 0 24 24"><path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/></svg>
+                </button>
+                <div class="time-info">
+                    <div class="progress-bar" onclick="seekMainPlayer('full', event)">
+                        <div class="progress-fill full-fill" id="fill-full"></div>
+                    </div>
+                    <div class="time-labels">
+                        <span id="cur-full">0:00</span>
+                        <span id="tot-full">--:--</span>
+                    </div>
+                </div>
+                <button class="speed-btn" id="spd-full" onclick="cycleSpeed('full')">1×</button>
+            </div>
+        </div>
+    </div>
+    {% endif %}
+
+    <!-- ── DATED RECORDINGS dropdown ── -->
+    {% if dated_recordings %}
+    <p class="section-label">Daily Full Recordings</p>
+    <div class="date-select-wrapper">
+        <select class="date-select" id="dated-select" onchange="onDatedSelect(this)">
+            <option value="">— Select a day —</option>
+            {% for filename in dated_recordings %}
+            <option value="{{ filename }}">{{ filename.replace('.mp3', '') }}</option>
+            {% endfor %}
+        </select>
+        <span class="select-arrow"><svg viewBox="0 0 24 24"><path d="M7 10l5 5 5-5z"/></svg></span>
+    </div>
+    <div class="recording-card" id="card-dated">
+        <div class="card-header">
+            <div class="card-icon date-icon">
+                <svg viewBox="0 0 24 24"><path d="M19 3h-1V1h-2v2H8V1H6v2H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V5a2 2 0 0 0-2-2zm0 16H5V8h14v11zM7 10h5v5H7z"/></svg>
+            </div>
+            <div class="card-meta">
+                <h2 id="label-dated">—</h2>
+                <p>Daily voice session</p>
+            </div>
+        </div>
+        <div class="player-container">
+            <div class="player-controls">
+                <button class="play-btn date-btn" id="play-dated" onclick="toggleMainPlayer('dated')">
+                    <svg class="icon-play" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>
+                    <svg class="icon-pause" viewBox="0 0 24 24"><path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/></svg>
+                </button>
+                <div class="time-info">
+                    <div class="progress-bar" onclick="seekMainPlayer('dated', event)">
+                        <div class="progress-fill date-fill" id="fill-dated"></div>
+                    </div>
+                    <div class="time-labels">
+                        <span id="cur-dated">0:00</span>
+                        <span id="tot-dated">--:--</span>
+                    </div>
+                </div>
+                <button class="speed-btn" id="spd-dated" onclick="cycleSpeed('dated')">1×</button>
+            </div>
+        </div>
+    </div>
+    {% endif %}
+
+    <!-- ── SPEECH CHUNKS (live-updating) ── -->
+    <div class="section-divider"><span>Speech Chunks</span></div>
+    <div class="chunks-section visible" id="chunks-section">
+        <!-- Populated by JS, refreshed every POLL_MS -->
+    </div>
+
+    {% endif %}
+</main>
+
+<script id="chunks-seed" type="application/json">{{ chunks_per_date | tojson }}</script>
+<script>
+    const USER_ID   = "{{ user.id }}";
+    const POLL_MS   = 10000;   // refresh chunks every 10 s
+
+    // Seed data from server render (fast first paint, no flicker)
+    let chunksData = JSON.parse(document.getElementById('chunks-seed').textContent);
+
+    // ── Main (full / dated) players ──────────────────────────────────────────
+    const mainAudios  = { full: null, dated: null };
+    const mainSpdIdx  = { full: 0, dated: 0 };
+    const SPEEDS      = [1, 1.25, 1.5, 2, 0.75];
+    const FULL_FILE   = "{{ full_recording or '' }}";
+
+    if (FULL_FILE) {
+        mainAudios.full = new Audio('/recordings/audio/' + USER_ID + '/' + FULL_FILE);
+        wireMainPlayer('full');
+    }
+
+    function onDatedSelect(sel) {
+        const fn = sel.value;
+        const card = document.getElementById('card-dated');
+        if (!fn) { card.classList.remove('visible'); return; }
+
+        if (mainAudios.dated) { mainAudios.dated.pause(); mainAudios.dated = null; }
+        resetMainPlayerUI('dated');
+        document.getElementById('label-dated').textContent = fn.replace('.mp3', '');
+
+        mainAudios.dated = new Audio('/recordings/audio/' + USER_ID + '/' + fn);
+        wireMainPlayer('dated');
+        card.classList.add('visible');
+    }
+
+    function wireMainPlayer(key) {
+        const a = mainAudios[key];
+        a.addEventListener('loadedmetadata', () => {
+            document.getElementById('tot-' + key).textContent = fmt(a.duration);
+        });
+        a.addEventListener('timeupdate', () => {
+            document.getElementById('fill-' + key).style.width = (a.currentTime / a.duration * 100) + '%';
+            document.getElementById('cur-' + key).textContent  = fmt(a.currentTime);
+        });
+        a.addEventListener('ended', () => resetMainPlayerUI(key));
+    }
+
+    function toggleMainPlayer(key) {
+        const a   = mainAudios[key];
+        const btn = document.getElementById('play-' + key);
+        if (!a) return;
+        // Pause the other
+        Object.keys(mainAudios).forEach(k => {
+            if (k !== key && mainAudios[k]) {
+                mainAudios[k].pause();
+                document.getElementById('play-' + k).classList.remove('playing');
+            }
+        });
+        // Also pause any chunk playing
+        pauseAllChunks();
+        if (a.paused) { a.play(); btn.classList.add('playing'); }
+        else          { a.pause(); btn.classList.remove('playing'); }
+    }
+
+    function seekMainPlayer(key, e) {
+        const a   = mainAudios[key];
+        const bar = e.currentTarget;
+        if (!a || !a.duration) return;
+        a.currentTime = ((e.clientX - bar.getBoundingClientRect().left) / bar.offsetWidth) * a.duration;
+    }
+
+    function cycleSpeed(key) {
+        const a = mainAudios[key];
+        if (!a) return;
+        mainSpdIdx[key] = (mainSpdIdx[key] + 1) % SPEEDS.length;
+        a.playbackRate = SPEEDS[mainSpdIdx[key]];
+        document.getElementById('spd-' + key).textContent = SPEEDS[mainSpdIdx[key]] + '×';
+    }
+
+    function resetMainPlayerUI(key) {
+        document.getElementById('play-' + key).classList.remove('playing');
+        document.getElementById('fill-' + key).style.width = '0%';
+        document.getElementById('cur-'  + key).textContent = '0:00';
+    }
+
+    // ── Chunk players ─────────────────────────────────────────────────────────
+    // chunkAudio[date][name] = Audio element
+    const chunkAudio = {};
+
+    function getChunkAudio(date, name, globalIdx) {
+        if (!chunkAudio[date]) chunkAudio[date] = {};
+        if (!chunkAudio[date][name]) {
+            const a = new Audio('/recordings/audio/' + USER_ID + '/chunks/' + date + '/' + name);
+            a.addEventListener('loadedmetadata', () => {
+                const el = document.getElementById('dur-' + date + '-' + globalIdx);
+                if (el) el.textContent = fmt(a.duration);
+            });
+            a.addEventListener('timeupdate', () => {
+                const fill = document.getElementById('fill-' + date + '-' + globalIdx);
+                if (fill) fill.style.width = (a.currentTime / a.duration * 100) + '%';
+            });
+            a.addEventListener('ended', () => {
+                const btn  = document.getElementById('btn-'  + date + '-' + globalIdx);
+                const row  = document.getElementById('row-'  + date + '-' + globalIdx);
+                const fill = document.getElementById('fill-' + date + '-' + globalIdx);
+                if (btn)  btn.classList.remove('playing');
+                if (row)  row.classList.remove('active');
+                if (fill) fill.style.width = '0%';
+                // Auto-advance
+                const list = chunksData[date] || [];
+                if (globalIdx + 1 < list.length)
+                    playChunk(date, list[globalIdx + 1], globalIdx + 1);
+            });
+            chunkAudio[date][name] = a;
+        }
+        return chunkAudio[date][name];
+    }
+
+    function playChunk(date, name, globalIdx) {
+        pauseAllChunks();
+        Object.keys(mainAudios).forEach(k => {
+            if (mainAudios[k]) { mainAudios[k].pause(); document.getElementById('play-' + k).classList.remove('playing'); }
+        });
+        const a   = getChunkAudio(date, name, globalIdx);
+        const btn = document.getElementById('btn-'  + date + '-' + globalIdx);
+        const row = document.getElementById('row-'  + date + '-' + globalIdx);
+        a.play();
+        if (btn) btn.classList.add('playing');
+        if (row) row.classList.add('active');
+    }
+
+    function pauseAllChunks() {
+        Object.values(chunkAudio).forEach(dateMap => {
+            Object.values(dateMap).forEach(a => { a.pause(); });
+        });
+        document.querySelectorAll('.chunk-play-btn').forEach(b  => b.classList.remove('playing'));
+        document.querySelectorAll('.chunk-row').forEach(r       => r.classList.remove('active'));
+    }
+
+    // ── Render chunks section ────────────────────────────────────────────────
+    function renderChunks(data) {
+        const section = document.getElementById('chunks-section');
+        const dates   = Object.keys(data).sort().reverse();   // newest date first
+
+        if (dates.length === 0) {
+            section.innerHTML = `
+                <div style="background:var(--surface);border:1px solid var(--border);border-radius:16px;
+                            padding:28px 24px;text-align:center;color:var(--muted);font-size:13px;">
+                    No speech chunks yet — VAD processor is scanning…
+                    <span style="display:inline-block;margin-left:8px;">
+                        <span style="display:inline-block;width:6px;height:6px;border-radius:50%;
+                               background:var(--gold);animation:pulse-dot 1.5s ease-in-out infinite;vertical-align:middle;"></span>
+                    </span>
+                </div>`;
+            return;
+        }
+
+        let html = '';
+        dates.forEach(date => {
+            const chunks   = data[date] || [];
+            const isToday  = date === new Date().toISOString().slice(0, 10);
+            const badgeHtml = isToday
+                ? `<span class="badge live">● live</span>`
+                : `<span class="badge">${chunks.length} chunk${chunks.length !== 1 ? 's' : ''}</span>`;
+
+            let rows = '';
+            chunks.forEach((name, idx) => {
+                rows += `
+                <div class="chunk-row" id="row-${date}-${idx}"
+                     onclick="playChunk('${date}','${name}',${idx})">
+                    <span class="chunk-num">#${String(idx + 1).padStart(3, '0')}</span>
+                    <button class="chunk-play-btn" id="btn-${date}-${idx}">
+                        <svg class="icon-play"  viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>
                         <svg class="icon-pause" viewBox="0 0 24 24"><path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/></svg>
                     </button>
-                    <div class="time-info">
-                        <div class="progress-bar" id="progress-bar" onclick="seek(event)">
-                            <div class="progress-fill" id="progress-fill"></div>
-                        </div>
-                        <div class="time-labels">
-                            <span id="current-time">0:00</span>
-                            <span id="total-time">--:--</span>
+                    <div class="chunk-info">
+                        <div class="chunk-name">${name}</div>
+                        <div class="chunk-mini-bar">
+                            <div class="chunk-mini-fill" id="fill-${date}-${idx}"></div>
                         </div>
                     </div>
-                    <button class="speed-btn" id="speed-btn" onclick="cycleSpeed()">1×</button>
+                    <span class="chunk-dur" id="dur-${date}-${idx}">--:--</span>
+                    <button class="chunk-del-btn" id="del-${date}-${idx}"
+                            title="Delete chunk"
+                            onclick="event.stopPropagation(); confirmDelete('${date}','${name}',${idx})">
+                        <svg viewBox="0 0 24 24"><path d="M9 3h6l1 1h4v2H4V4h4L9 3zm-3 5h12l-1 13H7L6 8zm5 2v9h1v-9h-1zm3 0v9h1v-9h-1z"/></svg>
+                    </button>
+                </div>`;
+            });
+
+            const liveRow = isToday
+                ? `<div class="live-row"><div class="live-dot"></div>Scanning for new speech…</div>`
+                : '';
+
+            html += `
+            <div class="date-group">
+                <div class="chunks-list-header">
+                    <div class="date-group-title">
+                        <div class="cal-dot"></div>${date}
+                    </div>
+                    ${badgeHtml}
                 </div>
-            </div>
-        </div>
+                <div class="chunks-list">
+                    ${chunks.length === 0
+                        ? `<div style="padding:16px 20px;color:var(--muted);font-size:12px;">
+                               Processing in progress…
+                           </div>`
+                        : rows}
+                    ${liveRow}
+                </div>
+            </div>`;
+        });
 
-        {% endif %}
-    </main>
+        section.innerHTML = html;
 
-    <script>
-        const speeds = [1, 1.25, 1.5, 2, 0.75];
-        const userId = "{{ user.id }}";
-        let audio = null;
-        let speedIdx = 0;
+        // Pre-load durations for all chunks
+        dates.forEach(date => {
+            (data[date] || []).forEach((name, idx) => {
+                getChunkAudio(date, name, idx);
+            });
+        });
+    }
 
-        const fullMicIcon = `<svg viewBox="0 0 24 24"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3zm-1 3a1 1 0 0 1 2 0v8a1 1 0 0 1-2 0V4zm-4 8a5 5 0 0 0 10 0h2a7 7 0 0 1-6 6.93V21h2v2H9v-2h2v-2.07A7 7 0 0 1 5 12H7z"/></svg>`;
-        const calIcon = `<svg viewBox="0 0 24 24"><path d="M19 3h-1V1h-2v2H8V1H6v2H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V5a2 2 0 0 0-2-2zm0 16H5V8h14v11zM7 10h5v5H7z"/></svg>`;
+    // ── Live polling ──────────────────────────────────────────────────────────
+    async function pollChunks() {
+        try {
+            const res  = await fetch('/recordings/api/chunks/' + USER_ID);
+            if (!res.ok) return;
+            const json = await res.json();
+            const fresh = json.chunks_per_date;
 
-        function formatTime(s) {
-            if (isNaN(s)) return '--:--';
-            return `${Math.floor(s/60)}:${String(Math.floor(s%60)).padStart(2,'0')}`;
-        }
-
-        function onRecordingSelect(select) {
-            const val = select.value;
-            const card = document.getElementById('player-card');
-
-            if (!val) { card.classList.remove('visible'); return; }
-
-            const [filename, type] = val.split('|');
-            const isFull = type === 'full';
-
-            // Stop previous audio
-            if (audio) { audio.pause(); audio = null; }
-
-            // Reset UI
-            document.getElementById('play-btn').classList.remove('playing');
-            document.getElementById('progress-fill').style.width = '0%';
-            document.getElementById('current-time').textContent = '0:00';
-            document.getElementById('total-time').textContent = '--:--';
-            document.getElementById('speed-btn').textContent = '1×';
-            speedIdx = 0;
-
-            // Update card style & content
-            const iconEl = document.getElementById('card-icon');
-            const playBtn = document.getElementById('play-btn');
-            const fill = document.getElementById('progress-fill');
-
-            if (isFull) {
-                card.classList.add('is-full');
-                iconEl.className = 'card-icon full-icon';
-                iconEl.innerHTML = fullMicIcon;
-                playBtn.className = 'play-btn full-btn';
-                fill.className = 'progress-fill full-fill';
-                document.getElementById('card-label').textContent = 'Recordings before 23-02-2026';
-                document.getElementById('card-sublabel').textContent = 'Merged voice sessions';
-            } else {
-                card.classList.remove('is-full');
-                iconEl.className = 'card-icon date-icon';
-                iconEl.innerHTML = calIcon;
-                playBtn.className = 'play-btn date-btn';
-                fill.className = 'progress-fill date-fill';
-                document.getElementById('card-label').textContent = filename.replace('.mp3', '');
-                document.getElementById('card-sublabel').textContent = 'Daily voice session';
+            // Check if anything changed (new dates or new chunks)
+            const changed = JSON.stringify(fresh) !== JSON.stringify(chunksData);
+            if (changed) {
+                chunksData = fresh;
+                renderChunks(chunksData);
             }
+        } catch (e) { /* ignore network errors */ }
+    }
 
-            // Create audio
-            audio = new Audio(`/recordings/audio/${userId}/${filename}`);
+    // ── Delete chunk ──────────────────────────────────────────────────────────
+    // Two-tap confirm: first tap highlights red, second tap sends DELETE request.
+    let pendingDelete = null;   // { date, name, idx, timer }
 
-            audio.addEventListener('loadedmetadata', () => {
-                document.getElementById('total-time').textContent = formatTime(audio.duration);
-            });
-            audio.addEventListener('timeupdate', () => {
-                document.getElementById('progress-fill').style.width = (audio.currentTime / audio.duration * 100) + '%';
-                document.getElementById('current-time').textContent = formatTime(audio.currentTime);
-            });
-            audio.addEventListener('ended', () => {
-                document.getElementById('play-btn').classList.remove('playing');
-                document.getElementById('progress-fill').style.width = '0%';
-                document.getElementById('current-time').textContent = '0:00';
-            });
+    function confirmDelete(date, name, idx) {
+        const btn = document.getElementById('del-' + date + '-' + idx);
+        if (!btn) return;
 
-            card.classList.add('visible');
+        // If a different button was pending, reset it
+        if (pendingDelete && (pendingDelete.date !== date || pendingDelete.idx !== idx)) {
+            const prev = document.getElementById('del-' + pendingDelete.date + '-' + pendingDelete.idx);
+            if (prev) prev.classList.remove('confirming');
+            clearTimeout(pendingDelete.timer);
+            pendingDelete = null;
         }
 
-        function togglePlay() {
-            if (!audio) return;
-            const btn = document.getElementById('play-btn');
-            if (audio.paused) { audio.play(); btn.classList.add('playing'); }
-            else { audio.pause(); btn.classList.remove('playing'); }
+        if (!pendingDelete) {
+            // First tap — arm the button
+            btn.classList.add('confirming');
+            btn.title = 'Tap again to confirm deletion';
+            const timer = setTimeout(() => {
+                btn.classList.remove('confirming');
+                btn.title = 'Delete chunk';
+                pendingDelete = null;
+            }, 3000);
+            pendingDelete = { date, name, idx, timer };
+        } else {
+            // Second tap — confirmed, delete
+            clearTimeout(pendingDelete.timer);
+            pendingDelete = null;
+            deleteChunk(date, name, idx);
+        }
+    }
+
+    async function deleteChunk(date, name, idx) {
+        const row = document.getElementById('row-' + date + '-' + idx);
+        if (row) { row.style.opacity = '0.4'; row.style.pointerEvents = 'none'; }
+
+        try {
+            const res = await fetch(
+                '/recordings/api/chunks/' + USER_ID + '/' + date + '/' + name,
+                { method: 'DELETE' }
+            );
+            if (!res.ok) {
+                if (row) { row.style.opacity = ''; row.style.pointerEvents = ''; }
+                console.error('Delete failed', res.status);
+                return;
+            }
+        } catch (e) {
+            if (row) { row.style.opacity = ''; row.style.pointerEvents = ''; }
+            return;
         }
 
-        function seek(e) {
-            if (!audio) return;
-            const bar = document.getElementById('progress-bar');
-            audio.currentTime = ((e.clientX - bar.getBoundingClientRect().left) / bar.offsetWidth) * audio.duration;
+        // Stop audio if it was playing
+        if (chunkAudio[date] && chunkAudio[date][name]) {
+            chunkAudio[date][name].pause();
+            delete chunkAudio[date][name];
         }
 
-        function cycleSpeed() {
-            if (!audio) return;
-            speedIdx = (speedIdx + 1) % speeds.length;
-            audio.playbackRate = speeds[speedIdx];
-            document.getElementById('speed-btn').textContent = speeds[speedIdx] + '×';
+        // Remove from local data & re-render
+        if (chunksData[date]) {
+            chunksData[date] = chunksData[date].filter(n => n !== name);
+            if (chunksData[date].length === 0) delete chunksData[date];
         }
-    </script>
+        renderChunks(chunksData);
+    }
+
+    // ── Helpers ────────────────────────────────────────────────────────────────
+    function fmt(s) {
+        if (isNaN(s) || s === Infinity) return '--:--';
+        return Math.floor(s / 60) + ':' + String(Math.floor(s % 60)).padStart(2, '0');
+    }
+
+    // ── Boot ──────────────────────────────────────────────────────────────────
+    renderChunks(chunksData);
+    setInterval(pollChunks, POLL_MS);
+</script>
 </body>
 </html>
