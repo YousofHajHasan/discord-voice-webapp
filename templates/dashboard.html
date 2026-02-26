@@ -211,6 +211,30 @@
         .section-divider { display: flex; align-items: center; gap: 12px; margin: 32px 0 20px; }
         .section-divider span { font-family: 'Syne', sans-serif; font-size: 14px; font-weight: 700; white-space: nowrap; }
         .section-divider::before, .section-divider::after { content:''; flex:1; height:1px; background: var(--border); }
+
+        /* DATE FILTER PILLS */
+        .date-filter { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 20px; }
+        .date-pill {
+            font-size: 12px; padding: 5px 14px; border-radius: 20px; cursor: pointer;
+            border: 1px solid var(--border); background: var(--surface);
+            color: var(--muted); font-family: 'DM Mono', monospace;
+            transition: all 0.15s; user-select: none;
+        }
+        .date-pill:hover { border-color: var(--border-hover); color: var(--text); }
+        .date-pill.active {
+            background: var(--accent-subtle); border-color: var(--accent);
+            color: var(--text);
+        }
+        .date-pill.live-pill { border-color: rgba(34,197,94,0.3); color: var(--green); }
+        .date-pill.live-pill.active { background: var(--green-subtle); border-color: var(--green); }
+
+        /* SHOW MORE */
+        .show-more-btn {
+            width: 100%; padding: 11px; border: none; background: var(--surface-2);
+            color: var(--muted); font-family: 'DM Mono', monospace; font-size: 12px;
+            cursor: pointer; transition: all 0.15s; border-top: 1px solid var(--border);
+        }
+        .show-more-btn:hover { color: var(--text); background: var(--border); }
     </style>
 </head>
 <body>
@@ -314,6 +338,7 @@
 
     <!-- ── SPEECH CHUNKS (live-updating) ── -->
     <div class="section-divider"><span>Speech Chunks</span></div>
+    <div class="date-filter" id="date-filter"></div>
     <div class="chunks-section visible" id="chunks-section">
         <!-- Populated by JS, refreshed every POLL_MS -->
     </div>
@@ -469,11 +494,82 @@
     }
 
     // ── Render chunks section ────────────────────────────────────────────────
+    const PAGE_SIZE  = 50;
+    let activeFilter = 'all';          // 'all' or a date string
+    const shownCount = {};             // { date: number } — how many rows are visible
+
+    function renderFilterPills(data) {
+        const today  = new Date().toISOString().slice(0, 10);
+        const dates  = Object.keys(data).sort().reverse();
+        const filter = document.getElementById('date-filter');
+        if (!filter) return;
+        if (dates.length === 0) { filter.innerHTML = ''; return; }
+
+        let html = `<span class="date-pill ${activeFilter === 'all' ? 'active' : ''}"
+                         onclick="setFilter('all')">All dates</span>`;
+        dates.forEach(d => {
+            const isToday = d === today;
+            html += `<span class="date-pill ${isToday ? 'live-pill' : ''} ${activeFilter === d ? 'active' : ''}"
+                          onclick="setFilter('${d}')">${d}${isToday ? ' ●' : ''}</span>`;
+        });
+        filter.innerHTML = html;
+    }
+
+    function setFilter(date) {
+        activeFilter = date;
+        renderFilterPills(chunksData);
+        renderChunks(chunksData);
+    }
+
+    function buildChunkRow(date, name, idx) {
+        return `
+        <div class="chunk-row" id="row-${date}-${idx}"
+             onclick="playChunk('${date}','${name}',${idx})">
+            <span class="chunk-num">#${String(idx + 1).padStart(3, '0')}</span>
+            <button class="chunk-play-btn" id="btn-${date}-${idx}">
+                <svg class="icon-play"  viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>
+                <svg class="icon-pause" viewBox="0 0 24 24"><path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/></svg>
+            </button>
+            <div class="chunk-info">
+                <div class="chunk-name">${name}</div>
+                <div class="chunk-mini-bar">
+                    <div class="chunk-mini-fill" id="fill-${date}-${idx}"></div>
+                </div>
+            </div>
+            <span class="chunk-dur" id="dur-${date}-${idx}">--:--</span>
+            <button class="chunk-del-btn" id="del-${date}-${idx}"
+                    title="Delete chunk"
+                    onclick="event.stopPropagation(); confirmDelete('${date}','${name}',${idx})">
+                <svg viewBox="0 0 24 24"><path d="M9 3h6l1 1h4v2H4V4h4L9 3zm-3 5h12l-1 13H7L6 8zm5 2v9h1v-9h-1zm3 0v9h1v-9h-1z"/></svg>
+            </button>
+        </div>`;
+    }
+
+    function showMore(date) {
+        shownCount[date] = (shownCount[date] || PAGE_SIZE) + PAGE_SIZE;
+        const chunks = chunksData[date] || [];
+        const shown  = Math.min(shownCount[date], chunks.length);
+
+        // Replace the show-more container for this date group only
+        const container = document.getElementById('rows-' + date);
+        if (!container) return;
+        let rows = '';
+        for (let i = 0; i < shown; i++) rows += buildChunkRow(date, chunks[i], i);
+        const remaining = chunks.length - shown;
+        const moreBtn   = remaining > 0
+            ? `<button class="show-more-btn" onclick="showMore('${date}')">
+                   Show ${Math.min(remaining, PAGE_SIZE)} more  (${remaining} remaining)
+               </button>` : '';
+        container.innerHTML = rows + moreBtn;
+    }
+
     function renderChunks(data) {
         const section = document.getElementById('chunks-section');
-        const dates   = Object.keys(data).sort().reverse();   // newest date first
+        const today   = new Date().toISOString().slice(0, 10);
+        const allDates = Object.keys(data).sort().reverse();
+        const dates    = activeFilter === 'all' ? allDates : allDates.filter(d => d === activeFilter);
 
-        if (dates.length === 0) {
+        if (allDates.length === 0) {
             section.innerHTML = `
                 <div style="background:var(--surface);border:1px solid var(--border);border-radius:16px;
                             padding:28px 24px;text-align:center;color:var(--muted);font-size:13px;">
@@ -489,35 +585,21 @@
         let html = '';
         dates.forEach(date => {
             const chunks   = data[date] || [];
-            const isToday  = date === new Date().toISOString().slice(0, 10);
+            const isToday  = date === today;
+            const shown    = Math.min(shownCount[date] || PAGE_SIZE, chunks.length);
+            const remaining = chunks.length - shown;
+
             const badgeHtml = isToday
                 ? `<span class="badge live">● live</span>`
                 : `<span class="badge">${chunks.length} chunk${chunks.length !== 1 ? 's' : ''}</span>`;
 
             let rows = '';
-            chunks.forEach((name, idx) => {
-                rows += `
-                <div class="chunk-row" id="row-${date}-${idx}"
-                     onclick="playChunk('${date}','${name}',${idx})">
-                    <span class="chunk-num">#${String(idx + 1).padStart(3, '0')}</span>
-                    <button class="chunk-play-btn" id="btn-${date}-${idx}">
-                        <svg class="icon-play"  viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>
-                        <svg class="icon-pause" viewBox="0 0 24 24"><path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/></svg>
-                    </button>
-                    <div class="chunk-info">
-                        <div class="chunk-name">${name}</div>
-                        <div class="chunk-mini-bar">
-                            <div class="chunk-mini-fill" id="fill-${date}-${idx}"></div>
-                        </div>
-                    </div>
-                    <span class="chunk-dur" id="dur-${date}-${idx}">--:--</span>
-                    <button class="chunk-del-btn" id="del-${date}-${idx}"
-                            title="Delete chunk"
-                            onclick="event.stopPropagation(); confirmDelete('${date}','${name}',${idx})">
-                        <svg viewBox="0 0 24 24"><path d="M9 3h6l1 1h4v2H4V4h4L9 3zm-3 5h12l-1 13H7L6 8zm5 2v9h1v-9h-1zm3 0v9h1v-9h-1z"/></svg>
-                    </button>
-                </div>`;
-            });
+            for (let i = 0; i < shown; i++) rows += buildChunkRow(date, chunks[i], i);
+
+            const moreBtn = remaining > 0
+                ? `<button class="show-more-btn" onclick="showMore('${date}')">
+                       Show ${Math.min(remaining, PAGE_SIZE)} more  (${remaining} remaining)
+                   </button>` : '';
 
             const liveRow = isToday
                 ? `<div class="live-row"><div class="live-dot"></div>Scanning for new speech…</div>`
@@ -526,24 +608,21 @@
             html += `
             <div class="date-group">
                 <div class="chunks-list-header">
-                    <div class="date-group-title">
-                        <div class="cal-dot"></div>${date}
-                    </div>
+                    <div class="date-group-title"><div class="cal-dot"></div>${date}</div>
                     ${badgeHtml}
                 </div>
                 <div class="chunks-list">
                     ${chunks.length === 0
-                        ? `<div style="padding:16px 20px;color:var(--muted);font-size:12px;">
-                               Processing in progress…
-                           </div>`
-                        : rows}
+                        ? `<div style="padding:16px 20px;color:var(--muted);font-size:12px;">Processing in progress…</div>`
+                        : `<div id="rows-${date}">${rows}${moreBtn}</div>`}
                     ${liveRow}
                 </div>
             </div>`;
         });
 
         section.innerHTML = html;
-        // Durations are loaded lazily when the user clicks a chunk — no pre-load.
+        // Sync pills whenever chunks re-render
+        renderFilterPills(data);
     }
 
     // ── Live polling ──────────────────────────────────────────────────────────
