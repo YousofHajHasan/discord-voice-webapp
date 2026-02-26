@@ -427,10 +427,7 @@
                 if (btn)  btn.classList.remove('playing');
                 if (row)  row.classList.remove('active');
                 if (fill) fill.style.width = '0%';
-                // Auto-advance
-                const list = chunksData[date] || [];
-                if (globalIdx + 1 < list.length)
-                    playChunk(date, list[globalIdx + 1], globalIdx + 1);
+                // No auto-advance — stop after each chunk
             });
             chunkAudio[date][name] = a;
         }
@@ -438,13 +435,26 @@
     }
 
     function playChunk(date, name, globalIdx) {
+        const a = getChunkAudio(date, name, globalIdx);
+        const btn = document.getElementById('btn-' + date + '-' + globalIdx);
+        const row = document.getElementById('row-' + date + '-' + globalIdx);
+
+        // Toggle: if this chunk is already playing, pause it
+        if (!a.paused) {
+            a.pause();
+            if (btn) btn.classList.remove('playing');
+            if (row) row.classList.remove('active');
+            return;
+        }
+
+        // Otherwise pause everything else and play this one
         pauseAllChunks();
         Object.keys(mainAudios).forEach(k => {
-            if (mainAudios[k]) { mainAudios[k].pause(); document.getElementById('play-' + k).classList.remove('playing'); }
+            if (mainAudios[k]) {
+                mainAudios[k].pause();
+                document.getElementById('play-' + k).classList.remove('playing');
+            }
         });
-        const a   = getChunkAudio(date, name, globalIdx);
-        const btn = document.getElementById('btn-'  + date + '-' + globalIdx);
-        const row = document.getElementById('row-'  + date + '-' + globalIdx);
         a.play();
         if (btn) btn.classList.add('playing');
         if (row) row.classList.add('active');
