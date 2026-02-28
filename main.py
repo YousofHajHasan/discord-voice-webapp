@@ -1,4 +1,6 @@
 import os
+import threading
+import time
 import logging
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse, JSONResponse
@@ -31,6 +33,38 @@ templates = Jinja2Templates(directory="templates")
 
 RECORDINGS_PATH = Path(os.environ.get("RECORDINGS_PATH", "/app/recordings"))
 
+CHUNK_SCAN_INTERVAL = 35  # seconds — slightly after VAD's 30s cycle
+
+
+def _scan_and_register_all_chunks():
+    """
+    Background thread: scans every user's chunks/ folder and registers any
+    new .wav files into the DB. Runs every CHUNK_SCAN_INTERVAL seconds.
+    This is the ONLY place disk is scanned after startup — the API poll
+    endpoints just read from the DB.
+    """
+    while True:
+        time.sleep(CHUNK_SCAN_INTERVAL)
+        try:
+            if not RECORDINGS_PATH.exists():
+                continue
+            for user_dir in RECORDINGS_PATH.iterdir():
+                if not user_dir.is_dir():
+                    continue
+                parts = user_dir.name.rsplit("_", 1)
+                if len(parts) != 2:
+                    continue
+                discord_id = parts[1]
+                chunks_root = user_dir / "chunks"
+                if not chunks_root.exists():
+                    continue
+                for date_dir in chunks_root.iterdir():
+                    if date_dir.is_dir():
+                        for wav in date_dir.glob("chunk_*.wav"):
+                            register_chunk(discord_id, date_dir.name, wav.name, str(wav))
+        except Exception as e:
+            logger.error(f"Background chunk scan error: {e}")
+
 
 @app.on_event("startup")
 async def startup():
@@ -56,6 +90,11 @@ async def startup():
                     if date_dir.is_dir():
                         for wav in date_dir.glob("chunk_*.wav"):
                             register_chunk(discord_id, date_dir.name, wav.name, str(wav))
+
+    # Start background thread that keeps the DB in sync with new VAD chunks
+    t = threading.Thread(target=_scan_and_register_all_chunks, daemon=True)
+    t.start()
+    logger.info(f"Background chunk scanner started (every {CHUNK_SCAN_INTERVAL}s)")
 
 
 def get_current_user(request: Request):
@@ -290,8 +329,7 @@ async def serve_chunk(user_id: str, date: str, filename: str, request: Request):
 async def api_chunks(user_id: str, request: Request):
     """
     Returns the current chunks_per_date dict for a user as JSON.
-    Also registers any new chunk files written to disk since startup.
-    Used by the dashboard to poll for new chunks without a full page reload.
+    Reads from DB only — disk scanning is handled by the background thread.
     """
     current_user = get_current_user(request)
     if not current_user:
@@ -299,19 +337,7 @@ async def api_chunks(user_id: str, request: Request):
     if current_user["id"] != user_id:
         raise HTTPException(status_code=403, detail="Forbidden")
 
-    # Register any chunks the VAD processor wrote since last startup
-    if RECORDINGS_PATH.exists():
-        for user_dir in RECORDINGS_PATH.iterdir():
-            if user_dir.name.endswith(f"_{user_id}"):
-                chunks_root = user_dir / "chunks"
-                if chunks_root.exists():
-                    for date_dir in chunks_root.iterdir():
-                        if date_dir.is_dir():
-                            for wav in date_dir.glob("chunk_*.wav"):
-                                register_chunk(user_id, date_dir.name, wav.name, str(wav))
-                break
-
-    _, _, chunks_per_date = get_user_recordings(user_id)
+    chunks_per_date = get_chunks_for_user(user_id)
     return {"chunks_per_date": chunks_per_date}
 
 
