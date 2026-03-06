@@ -53,60 +53,10 @@
         .section-label { font-size: 11px; text-transform: uppercase; letter-spacing: 1.5px; color: var(--muted); margin-bottom: 12px; }
 
         /* DROPDOWN */
-        .date-select-wrapper { position: relative; margin-bottom: 16px; }
-        .date-select {
-            width: 100%; background: var(--surface); border: 1px solid var(--border);
-            color: var(--text); font-family: 'DM Mono', monospace; font-size: 13px;
-            padding: 12px 40px 12px 16px; border-radius: 12px;
-            appearance: none; cursor: pointer; transition: border-color 0.2s; outline: none;
-        }
-        .date-select:hover, .date-select:focus { border-color: var(--border-hover); }
-        .date-select option { background: #1a1a2e; }
-        .select-arrow { position: absolute; right: 14px; top: 50%; transform: translateY(-50%); pointer-events: none; }
-        .select-arrow svg { width: 16px; height: 16px; fill: var(--muted); }
+        .date-select-wrapper { display: none; }
 
-        /* PLAYER CARD (full recording) */
-        .recording-card {
-            background: var(--surface); border: 1px solid var(--border);
-            border-radius: 20px; padding: 24px; display: none; margin-bottom: 20px;
-        }
-        .recording-card.visible { display: block; }
-        .recording-card.is-full { border-color: rgba(245,158,11,0.2); }
-        .card-header { display: flex; align-items: center; gap: 14px; margin-bottom: 20px; }
-        .card-icon { width: 40px; height: 40px; border-radius: 12px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
-        .full-icon { background: var(--gold-subtle); border: 1px solid rgba(245,158,11,0.2); }
-        .date-icon { background: var(--accent-subtle); border: 1px solid rgba(88,101,242,0.2); }
-        .card-icon svg { width: 18px; height: 18px; }
-        .full-icon svg { fill: var(--gold); }
-        .date-icon svg { fill: var(--accent); }
-        .card-meta h2 { font-family: 'Syne', sans-serif; font-size: 16px; font-weight: 700; margin-bottom: 2px; }
-        .card-meta p { color: var(--muted); font-size: 12px; }
-        .player-container { background: var(--surface-2); border: 1px solid var(--border); border-radius: 12px; padding: 16px 20px; }
-        .player-controls { display: flex; align-items: center; gap: 14px; }
-        .play-btn {
-            width: 38px; height: 38px; border: none; border-radius: 50%;
-            cursor: pointer; display: flex; align-items: center; justify-content: center;
-            flex-shrink: 0; transition: all 0.2s;
-        }
-        .full-btn { background: var(--gold); box-shadow: 0 4px 16px rgba(245,158,11,0.3); }
-        .date-btn { background: var(--accent); box-shadow: 0 4px 16px var(--accent-glow); }
-        .play-btn:hover { transform: scale(1.08); }
-        .play-btn svg { width: 14px; height: 14px; fill: white; }
-        .play-btn .icon-pause { display: none; }
-        .play-btn.playing .icon-play { display: none; }
-        .play-btn.playing .icon-pause { display: block; }
-        .time-info { display: flex; flex-direction: column; gap: 5px; flex: 1; }
-        .progress-bar { width: 100%; height: 3px; background: var(--border); border-radius: 2px; cursor: pointer; }
-        .progress-fill { height: 100%; border-radius: 2px; width: 0%; transition: width 0.1s linear; }
-        .full-fill { background: var(--gold); }
-        .date-fill { background: var(--accent); }
-        .time-labels { display: flex; justify-content: space-between; font-size: 11px; color: var(--muted); }
-        .speed-btn {
-            background: var(--border); border: none; color: var(--muted);
-            font-family: 'DM Mono', monospace; font-size: 11px;
-            padding: 4px 10px; border-radius: 6px; cursor: pointer; transition: all 0.2s;
-        }
-        .speed-btn:hover { background: var(--border-hover); color: var(--text); }
+        /* PLAYER CARD — kept for potential future use, hidden by default */
+        .recording-card { display: none; }
 
         /* CHUNKS SECTION */
         .chunks-section { display: none; }
@@ -175,6 +125,11 @@
 
         .chunk-info { flex: 1; min-width: 0; }
         .chunk-name { font-size: 12px; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .chunk-transcription {
+            font-size: 11px; color: var(--muted); margin-top: 4px;
+            white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+        }
+        .chunk-transcription.none { font-style: italic; opacity: 0.5; }
         .chunk-mini-bar { width: 100%; height: 2px; background: var(--border); border-radius: 1px; margin-top: 5px; }
         .chunk-mini-fill { height: 100%; background: var(--green); border-radius: 1px; width: 0%; transition: width 0.1s linear; }
         .chunk-dur { font-size: 11px; color: var(--muted); flex-shrink: 0; min-width: 36px; text-align: right; }
@@ -251,90 +206,13 @@
     <h1 class="page-title">Your Recordings</h1>
     <p class="page-subtitle">All voice recordings associated with your Discord account.</p>
 
-    {% if not full_recording and not dated_recordings %}
+    {% if not chunks_per_date %}
     <div class="empty-state">
         <svg viewBox="0 0 24 24"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3zm-1 3a1 1 0 0 1 2 0v8a1 1 0 0 1-2 0V4zM5 12H7a5 5 0 0 0 10 0h2a7 7 0 0 1-6 6.93V21h2v2H9v-2h2v-2.07A7 7 0 0 1 5 12z" opacity="0.3"/></svg>
         <h3>No recordings yet</h3>
         <p>Your voice recordings will appear here once you've participated in a session.</p>
     </div>
     {% else %}
-
-    <!-- ── FULL RECORDING (legacy) ── -->
-    {% if full_recording %}
-    <p class="section-label">Legacy Recording</p>
-    <div class="recording-card is-full visible" id="card-full">
-        <div class="card-header">
-            <div class="card-icon full-icon">
-                <svg viewBox="0 0 24 24"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3zm-1 3a1 1 0 0 1 2 0v8a1 1 0 0 1-2 0V4zm-4 8a5 5 0 0 0 10 0h2a7 7 0 0 1-6 6.93V21h2v2H9v-2h2v-2.07A7 7 0 0 1 5 12H7z"/></svg>
-            </div>
-            <div class="card-meta">
-                <h2>Recordings before 23-02-2026</h2>
-                <p>Merged voice sessions</p>
-            </div>
-        </div>
-        <div class="player-container">
-            <div class="player-controls">
-                <button class="play-btn full-btn" id="play-full" onclick="toggleMainPlayer('full')">
-                    <svg class="icon-play" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>
-                    <svg class="icon-pause" viewBox="0 0 24 24"><path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/></svg>
-                </button>
-                <div class="time-info">
-                    <div class="progress-bar" onclick="seekMainPlayer('full', event)">
-                        <div class="progress-fill full-fill" id="fill-full"></div>
-                    </div>
-                    <div class="time-labels">
-                        <span id="cur-full">0:00</span>
-                        <span id="tot-full">--:--</span>
-                    </div>
-                </div>
-                <button class="speed-btn" id="spd-full" onclick="cycleSpeed('full')">1×</button>
-            </div>
-        </div>
-    </div>
-    {% endif %}
-
-    <!-- ── DATED RECORDINGS dropdown ── -->
-    {% if dated_recordings %}
-    <p class="section-label">Daily Full Recordings</p>
-    <div class="date-select-wrapper">
-        <select class="date-select" id="dated-select" onchange="onDatedSelect(this)">
-            <option value="">— Select a day —</option>
-            {% for filename in dated_recordings %}
-            <option value="{{ filename }}">{{ filename.replace('.mp3', '') }}</option>
-            {% endfor %}
-        </select>
-        <span class="select-arrow"><svg viewBox="0 0 24 24"><path d="M7 10l5 5 5-5z"/></svg></span>
-    </div>
-    <div class="recording-card" id="card-dated">
-        <div class="card-header">
-            <div class="card-icon date-icon">
-                <svg viewBox="0 0 24 24"><path d="M19 3h-1V1h-2v2H8V1H6v2H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V5a2 2 0 0 0-2-2zm0 16H5V8h14v11zM7 10h5v5H7z"/></svg>
-            </div>
-            <div class="card-meta">
-                <h2 id="label-dated">—</h2>
-                <p>Daily voice session</p>
-            </div>
-        </div>
-        <div class="player-container">
-            <div class="player-controls">
-                <button class="play-btn date-btn" id="play-dated" onclick="toggleMainPlayer('dated')">
-                    <svg class="icon-play" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>
-                    <svg class="icon-pause" viewBox="0 0 24 24"><path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/></svg>
-                </button>
-                <div class="time-info">
-                    <div class="progress-bar" onclick="seekMainPlayer('dated', event)">
-                        <div class="progress-fill date-fill" id="fill-dated"></div>
-                    </div>
-                    <div class="time-labels">
-                        <span id="cur-dated">0:00</span>
-                        <span id="tot-dated">--:--</span>
-                    </div>
-                </div>
-                <button class="speed-btn" id="spd-dated" onclick="cycleSpeed('dated')">1×</button>
-            </div>
-        </div>
-    </div>
-    {% endif %}
 
     <!-- ── SPEECH CHUNKS (live-updating) ── -->
     <div class="section-divider"><span>Speech Chunks</span></div>
@@ -352,82 +230,8 @@
     const POLL_MS   = 10000;   // refresh chunks every 10 s
 
     // Seed data from server render (fast first paint, no flicker)
+    // Shape: { "YYYY-MM-DD": [{ filename, transcription }, ...] }
     let chunksData = JSON.parse(document.getElementById('chunks-seed').textContent);
-
-    // ── Main (full / dated) players ──────────────────────────────────────────
-    const mainAudios  = { full: null, dated: null };
-    const mainSpdIdx  = { full: 0, dated: 0 };
-    const SPEEDS      = [1, 1.25, 1.5, 2, 0.75];
-    const FULL_FILE   = "{{ full_recording or '' }}";
-
-    if (FULL_FILE) {
-        mainAudios.full = new Audio('/recordings/audio/' + USER_ID + '/' + FULL_FILE);
-        wireMainPlayer('full');
-    }
-
-    function onDatedSelect(sel) {
-        const fn = sel.value;
-        const card = document.getElementById('card-dated');
-        if (!fn) { card.classList.remove('visible'); return; }
-
-        if (mainAudios.dated) { mainAudios.dated.pause(); mainAudios.dated = null; }
-        resetMainPlayerUI('dated');
-        document.getElementById('label-dated').textContent = fn.replace('.mp3', '');
-
-        mainAudios.dated = new Audio('/recordings/audio/' + USER_ID + '/' + fn);
-        wireMainPlayer('dated');
-        card.classList.add('visible');
-    }
-
-    function wireMainPlayer(key) {
-        const a = mainAudios[key];
-        a.addEventListener('loadedmetadata', () => {
-            document.getElementById('tot-' + key).textContent = fmt(a.duration);
-        });
-        a.addEventListener('timeupdate', () => {
-            document.getElementById('fill-' + key).style.width = (a.currentTime / a.duration * 100) + '%';
-            document.getElementById('cur-' + key).textContent  = fmt(a.currentTime);
-        });
-        a.addEventListener('ended', () => resetMainPlayerUI(key));
-    }
-
-    function toggleMainPlayer(key) {
-        const a   = mainAudios[key];
-        const btn = document.getElementById('play-' + key);
-        if (!a) return;
-        // Pause the other
-        Object.keys(mainAudios).forEach(k => {
-            if (k !== key && mainAudios[k]) {
-                mainAudios[k].pause();
-                document.getElementById('play-' + k).classList.remove('playing');
-            }
-        });
-        // Also pause any chunk playing
-        pauseAllChunks();
-        if (a.paused) { a.play(); btn.classList.add('playing'); }
-        else          { a.pause(); btn.classList.remove('playing'); }
-    }
-
-    function seekMainPlayer(key, e) {
-        const a   = mainAudios[key];
-        const bar = e.currentTarget;
-        if (!a || !a.duration) return;
-        a.currentTime = ((e.clientX - bar.getBoundingClientRect().left) / bar.offsetWidth) * a.duration;
-    }
-
-    function cycleSpeed(key) {
-        const a = mainAudios[key];
-        if (!a) return;
-        mainSpdIdx[key] = (mainSpdIdx[key] + 1) % SPEEDS.length;
-        a.playbackRate = SPEEDS[mainSpdIdx[key]];
-        document.getElementById('spd-' + key).textContent = SPEEDS[mainSpdIdx[key]] + '×';
-    }
-
-    function resetMainPlayerUI(key) {
-        document.getElementById('play-' + key).classList.remove('playing');
-        document.getElementById('fill-' + key).style.width = '0%';
-        document.getElementById('cur-'  + key).textContent = '0:00';
-    }
 
     // ── Chunk players ─────────────────────────────────────────────────────────
     // chunkAudio[date][name] = Audio element
@@ -452,7 +256,6 @@
                 if (btn)  btn.classList.remove('playing');
                 if (row)  row.classList.remove('active');
                 if (fill) fill.style.width = '0%';
-                // No auto-advance — stop after each chunk
             });
             chunkAudio[date][name] = a;
         }
@@ -464,7 +267,6 @@
         const btn = document.getElementById('btn-' + date + '-' + globalIdx);
         const row = document.getElementById('row-' + date + '-' + globalIdx);
 
-        // Toggle: if this chunk is already playing, pause it
         if (!a.paused) {
             a.pause();
             if (btn) btn.classList.remove('playing');
@@ -472,14 +274,7 @@
             return;
         }
 
-        // Otherwise pause everything else and play this one
         pauseAllChunks();
-        Object.keys(mainAudios).forEach(k => {
-            if (mainAudios[k]) {
-                mainAudios[k].pause();
-                document.getElementById('play-' + k).classList.remove('playing');
-            }
-        });
         a.play();
         if (btn) btn.classList.add('playing');
         if (row) row.classList.add('active');
@@ -489,14 +284,14 @@
         Object.values(chunkAudio).forEach(dateMap => {
             Object.values(dateMap).forEach(a => { a.pause(); });
         });
-        document.querySelectorAll('.chunk-play-btn').forEach(b  => b.classList.remove('playing'));
-        document.querySelectorAll('.chunk-row').forEach(r       => r.classList.remove('active'));
+        document.querySelectorAll('.chunk-play-btn').forEach(b => b.classList.remove('playing'));
+        document.querySelectorAll('.chunk-row').forEach(r => r.classList.remove('active'));
     }
 
-    // ── Render chunks section ────────────────────────────────────────────────
+    // ── Render chunks section ─────────────────────────────────────────────────
     const PAGE_SIZE  = 50;
-    let activeFilter = 'all';          // 'all' or a date string
-    const shownCount = {};             // { date: number } — how many rows are visible
+    let activeFilter = 'all';
+    const shownCount = {};
 
     function renderFilterPills(data) {
         const today  = new Date().toISOString().slice(0, 10);
@@ -521,7 +316,13 @@
         renderChunks(chunksData);
     }
 
-    function buildChunkRow(date, name, idx) {
+    function buildChunkRow(date, chunk, idx) {
+        const name = chunk.filename;
+        const tx   = chunk.transcription;
+        const txHtml = tx
+            ? `<div class="chunk-transcription">${escapeHtml(tx)}</div>`
+            : `<div class="chunk-transcription none">No transcription yet</div>`;
+
         return `
         <div class="chunk-row" id="row-${date}-${idx}"
              onclick="playChunk('${date}','${name}',${idx})">
@@ -532,6 +333,7 @@
             </button>
             <div class="chunk-info">
                 <div class="chunk-name">${name}</div>
+                ${txHtml}
                 <div class="chunk-mini-bar">
                     <div class="chunk-mini-fill" id="fill-${date}-${idx}"></div>
                 </div>
@@ -545,12 +347,15 @@
         </div>`;
     }
 
+    function escapeHtml(str) {
+        return str.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+    }
+
     function showMore(date) {
         shownCount[date] = (shownCount[date] || PAGE_SIZE) + PAGE_SIZE;
         const chunks = chunksData[date] || [];
         const shown  = Math.min(shownCount[date], chunks.length);
 
-        // Replace the show-more container for this date group only
         const container = document.getElementById('rows-' + date);
         if (!container) return;
         let rows = '';
@@ -584,9 +389,9 @@
 
         let html = '';
         dates.forEach(date => {
-            const chunks   = data[date] || [];
-            const isToday  = date === today;
-            const shown    = Math.min(shownCount[date] || PAGE_SIZE, chunks.length);
+            const chunks    = data[date] || [];
+            const isToday   = date === today;
+            const shown     = Math.min(shownCount[date] || PAGE_SIZE, chunks.length);
             const remaining = chunks.length - shown;
 
             const badgeHtml = isToday
@@ -621,11 +426,10 @@
         });
 
         section.innerHTML = html;
-        // Sync pills whenever chunks re-render
         renderFilterPills(data);
     }
 
-    // ── Live polling ──────────────────────────────────────────────────────────
+    // ── Live polling ───────────────────────────────────────────────────────────
     async function pollChunks() {
         try {
             const res  = await fetch('/recordings/api/chunks/' + USER_ID);
@@ -633,7 +437,6 @@
             const json = await res.json();
             const fresh = json.chunks_per_date;
 
-            // Check if anything changed (new dates or new chunks)
             const changed = JSON.stringify(fresh) !== JSON.stringify(chunksData);
             if (changed) {
                 chunksData = fresh;
@@ -642,15 +445,13 @@
         } catch (e) { /* ignore network errors */ }
     }
 
-    // ── Delete chunk ──────────────────────────────────────────────────────────
-    // Two-tap confirm: first tap highlights red, second tap sends DELETE request.
-    let pendingDelete = null;   // { date, name, idx, timer }
+    // ── Delete chunk ───────────────────────────────────────────────────────────
+    let pendingDelete = null;
 
     function confirmDelete(date, name, idx) {
         const btn = document.getElementById('del-' + date + '-' + idx);
         if (!btn) return;
 
-        // If a different button was pending, reset it
         if (pendingDelete && (pendingDelete.date !== date || pendingDelete.idx !== idx)) {
             const prev = document.getElementById('del-' + pendingDelete.date + '-' + pendingDelete.idx);
             if (prev) prev.classList.remove('confirming');
@@ -659,7 +460,6 @@
         }
 
         if (!pendingDelete) {
-            // First tap — arm the button
             btn.classList.add('confirming');
             btn.title = 'Tap again to confirm deletion';
             const timer = setTimeout(() => {
@@ -669,7 +469,6 @@
             }, 3000);
             pendingDelete = { date, name, idx, timer };
         } else {
-            // Second tap — confirmed, delete
             clearTimeout(pendingDelete.timer);
             pendingDelete = null;
             deleteChunk(date, name, idx);
@@ -695,15 +494,13 @@
             return;
         }
 
-        // Stop audio if it was playing
         if (chunkAudio[date] && chunkAudio[date][name]) {
             chunkAudio[date][name].pause();
             delete chunkAudio[date][name];
         }
 
-        // Remove from local data & re-render
         if (chunksData[date]) {
-            chunksData[date] = chunksData[date].filter(n => n !== name);
+            chunksData[date] = chunksData[date].filter(c => c.filename !== name);
             if (chunksData[date].length === 0) delete chunksData[date];
         }
         renderChunks(chunksData);
@@ -715,7 +512,7 @@
         return Math.floor(s / 60) + ':' + String(Math.floor(s % 60)).padStart(2, '0');
     }
 
-    // ── Boot ──────────────────────────────────────────────────────────────────
+    // ── Boot ───────────────────────────────────────────────────────────────────
     renderChunks(chunksData);
     setInterval(pollChunks, POLL_MS);
 </script>
