@@ -10,7 +10,11 @@ from starlette.middleware.sessions import SessionMiddleware
 from pathlib import Path
 
 from auth import get_discord_oauth_url, exchange_code, get_discord_user
-from database import init_db, upsert_user, log_audio_file, register_chunk, get_chunks_for_user, delete_chunk
+from database import (
+    init_db, upsert_user, log_audio_file,
+    register_chunk, get_chunks_for_user, delete_chunk,
+    get_pending_chunks, set_transcription,
+)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -32,8 +36,18 @@ app.add_middleware(
 templates = Jinja2Templates(directory="templates")
 
 RECORDINGS_PATH = Path(os.environ.get("RECORDINGS_PATH", "/app/recordings"))
+TRANSCRIPTION_API_KEY = os.environ.get("TRANSCRIPTION_API_KEY", "")
 
 CHUNK_SCAN_INTERVAL = 35  # seconds — slightly after VAD's 30s cycle
+
+
+def _require_api_key(request: Request):
+    """Validates X-API-Key header for script-facing endpoints."""
+    if not TRANSCRIPTION_API_KEY:
+        raise HTTPException(status_code=500, detail="TRANSCRIPTION_API_KEY not configured on server")
+    key = request.headers.get("X-API-Key", "")
+    if key != TRANSCRIPTION_API_KEY:
+        raise HTTPException(status_code=401, detail="Invalid or missing API key")
 
 
 def _scan_and_register_all_chunks():
@@ -76,12 +90,7 @@ async def startup():
             parts = user_dir.name.rsplit("_", 1)
             if len(parts) != 2:
                 continue
-            discord_id, username = parts[1], parts[0]
-
-            # Register raw MP3s (legacy)
-            for f in user_dir.iterdir():
-                if f.suffix == ".mp3":
-                    log_audio_file(discord_id, username, str(f))
+            discord_id = parts[1]
 
             # Register processed VAD chunks
             chunks_root = user_dir / "chunks"
@@ -106,30 +115,10 @@ def get_current_user(request: Request):
 
 def get_user_recordings(user_id: str):
     """
-    Returns (full_recording, dated_recordings_sorted_newest_first, chunks_per_date)
-    chunks_per_date: dict of { "YYYY-MM-DD": ["chunk_001.wav", ...] }
-    Chunks come from the DB (respects is_deleted flag).
+    Returns chunks_per_date from DB.
+    chunks_per_date: { "YYYY-MM-DD": [{"filename": "chunk_001.wav", "transcription": "..."}, ...] }
     """
-    full_recording   = None
-    dated_recordings = []
-
-    if RECORDINGS_PATH.exists():
-        for user_dir in RECORDINGS_PATH.iterdir():
-            if user_dir.name.endswith(f"_{user_id}"):
-                for f in user_dir.iterdir():
-                    if f.suffix == ".mp3":
-                        if f.name == "Full_Recording.mp3":
-                            full_recording = f.name
-                        else:
-                            dated_recordings.append(f.name)
-                break
-
-    dated_recordings.sort(reverse=True)
-
-    # Chunks are authoritative from the DB (deleted ones are excluded)
-    chunks_per_date = get_chunks_for_user(user_id)
-
-    return full_recording, dated_recordings, chunks_per_date
+    return get_chunks_for_user(user_id)
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -182,84 +171,13 @@ async def dashboard(request: Request):
     if not user:
         return RedirectResponse("/recordings/")
 
-    full_recording, dated_recordings, chunks_per_date = get_user_recordings(user["id"])
+    chunks_per_date = get_user_recordings(user["id"])
 
     return templates.TemplateResponse("dashboard.html", {
         "request": request,
         "user": user,
-        "full_recording": full_recording,
-        "dated_recordings": dated_recordings,
         "chunks_per_date": chunks_per_date,
     })
-
-
-@app.get("/audio/{user_id}/{filename}")
-async def serve_audio(user_id: str, filename: str, request: Request):
-    current_user = get_current_user(request)
-    if not current_user:
-        logger.warning(f"Unauthenticated audio access attempt for user_id={user_id}")
-        raise HTTPException(status_code=401, detail="Unauthorized")
-
-    if current_user["id"] != user_id:
-        logger.warning(f"Forbidden: {current_user['username']} ({current_user['id']}) tried to access audio of {user_id}")
-        raise HTTPException(status_code=403, detail="Forbidden")
-
-    # Security: prevent path traversal
-    if "/" in filename or ".." in filename:
-        raise HTTPException(status_code=400, detail="Invalid filename")
-
-    audio_file = None
-    if RECORDINGS_PATH.exists():
-        for user_dir in RECORDINGS_PATH.iterdir():
-            if user_dir.name.endswith(f"_{user_id}"):
-                candidate = user_dir / filename
-                if candidate.exists():
-                    audio_file = candidate
-                break
-
-    if not audio_file:
-        raise HTTPException(status_code=404, detail="Recording not found")
-
-    logger.info(f"Audio served to: {current_user['username']} ({current_user['id']}) - {filename}")
-
-    media_type = "audio/wav" if filename.endswith(".wav") else "audio/mpeg"
-    file_size  = audio_file.stat().st_size
-    range_header = request.headers.get("range")
-
-    def iter_file(start=0, end=None):
-        chunk_size = 1024 * 256
-        with open(audio_file, "rb") as f:
-            f.seek(start)
-            remaining = (end - start + 1) if end else None
-            while True:
-                to_read = min(chunk_size, remaining) if remaining else chunk_size
-                data = f.read(to_read)
-                if not data:
-                    break
-                if remaining:
-                    remaining -= len(data)
-                yield data
-                if remaining is not None and remaining <= 0:
-                    break
-
-    if range_header:
-        range_val = range_header.replace("bytes=", "")
-        start_str, end_str = range_val.split("-")
-        start = int(start_str)
-        end   = int(end_str) if end_str else file_size - 1
-        headers = {
-            "Content-Range": f"bytes {start}-{end}/{file_size}",
-            "Accept-Ranges": "bytes",
-            "Content-Length": str(end - start + 1),
-            "Content-Type": media_type,
-        }
-        return StreamingResponse(iter_file(start, end), status_code=206, headers=headers)
-
-    return StreamingResponse(
-        iter_file(),
-        media_type=media_type,
-        headers={"Accept-Ranges": "bytes", "Content-Length": str(file_size)},
-    )
 
 
 @app.get("/audio/{user_id}/chunks/{date}/{filename}")
@@ -325,6 +243,8 @@ async def serve_chunk(user_id: str, date: str, filename: str, request: Request):
     )
 
 
+# ── Dashboard chunk poll (Discord session auth) ───────────────────────────────
+
 @app.get("/api/chunks/{user_id}")
 async def api_chunks(user_id: str, request: Request):
     """
@@ -353,7 +273,6 @@ async def api_delete_chunk(user_id: str, date: str, filename: str, request: Requ
     if current_user["id"] != user_id:
         raise HTTPException(status_code=403, detail="Forbidden")
 
-    # Validate inputs — no path traversal
     if any(".." in x or "/" in x for x in (date, filename)):
         raise HTTPException(status_code=400, detail="Invalid path")
 
@@ -363,6 +282,84 @@ async def api_delete_chunk(user_id: str, date: str, filename: str, request: Requ
 
     logger.info(f"Chunk deleted by {current_user['username']} ({user_id}): {date}/{filename}")
     return JSONResponse({"ok": True, "deleted": f"{date}/{filename}"})
+
+
+# ── Transcription script endpoints (API-key auth) ─────────────────────────────
+
+@app.get("/api/script/chunks/pending")
+async def script_pending_chunks(request: Request):
+    """
+    Returns all chunks that have no transcription yet.
+    Used by the remote transcription script to know what to process next.
+    Response: { "pending": [{"discord_id", "date", "filename"}, ...] }
+    """
+    _require_api_key(request)
+    pending = get_pending_chunks()
+    logger.info(f"Pending chunks requested — {len(pending)} items returned")
+    return {"pending": pending}
+
+
+@app.get("/api/script/download/{user_id}/{date}/{filename}")
+async def script_download_chunk(user_id: str, date: str, filename: str, request: Request):
+    """
+    Streams a chunk .wav file to the remote transcription script.
+    Authenticated with X-API-Key — no browser session required.
+    """
+    _require_api_key(request)
+
+    if "/" in filename or ".." in filename or "/" in date or ".." in date:
+        raise HTTPException(status_code=400, detail="Invalid path")
+
+    audio_file = None
+    if RECORDINGS_PATH.exists():
+        for user_dir in RECORDINGS_PATH.iterdir():
+            if user_dir.name.endswith(f"_{user_id}"):
+                candidate = user_dir / "chunks" / date / filename
+                if candidate.exists():
+                    audio_file = candidate
+                break
+
+    if not audio_file:
+        raise HTTPException(status_code=404, detail="Chunk not found")
+
+    logger.info(f"Script download: {user_id}/{date}/{filename}")
+
+    file_size = audio_file.stat().st_size
+
+    def iter_file():
+        with open(audio_file, "rb") as f:
+            while chunk := f.read(1024 * 256):
+                yield chunk
+
+    return StreamingResponse(
+        iter_file(),
+        media_type="audio/wav",
+        headers={"Content-Length": str(file_size), "Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@app.post("/api/script/transcriptions/{user_id}/{date}/{filename}")
+async def script_submit_transcription(user_id: str, date: str, filename: str, request: Request):
+    """
+    Receives a transcription result from the remote script and saves it to the DB.
+    Body: { "transcription": "..." }
+    """
+    _require_api_key(request)
+
+    if "/" in filename or ".." in filename or "/" in date or ".." in date:
+        raise HTTPException(status_code=400, detail="Invalid path")
+
+    body = await request.json()
+    text = body.get("transcription", "").strip()
+    if not text:
+        raise HTTPException(status_code=422, detail="'transcription' field is required and must not be empty")
+
+    ok = set_transcription(user_id, date, filename, text)
+    if not ok:
+        raise HTTPException(status_code=404, detail="Chunk not found or already deleted")
+
+    logger.info(f"Transcription saved: {user_id}/{date}/{filename} ({len(text.split())} words)")
+    return JSONResponse({"ok": True, "chunk": f"{date}/{filename}", "words": len(text.split())})
 
 
 @app.get("/logout")
