@@ -1,6 +1,6 @@
 import os
 from datetime import datetime
-from sqlalchemy import create_engine, Column, String, Boolean, DateTime, Text, ForeignKey, UniqueConstraint
+from sqlalchemy import create_engine, Column, String, Boolean, DateTime, Text, ForeignKey, UniqueConstraint, Float
 from sqlalchemy.orm import declarative_base, sessionmaker
 
 DB_PATH = os.environ.get("DB_PATH", "/app/db/recordings.db")
@@ -44,6 +44,8 @@ class Chunk(Base):
     filepath = Column(Text, nullable=False)         # absolute path on disk
     created_at = Column(DateTime, default=datetime.utcnow)
     is_deleted = Column(Boolean, default=False)
+    transcription = Column(Text, nullable=True, default=None)   # whisper output
+    transcribed_at = Column(DateTime, nullable=True, default=None)
 
 
 def init_db():
@@ -119,7 +121,8 @@ def register_chunk(discord_id: str, date: str, filename: str, filepath: str):
 
 def get_chunks_for_user(discord_id: str) -> dict:
     """
-    Returns { "YYYY-MM-DD": ["chunk_001.wav", ...] } ordered date-desc, filename-asc.
+    Returns { "YYYY-MM-DD": [{"filename": "chunk_001.wav", "transcription": "..."}, ...] }
+    ordered date-desc, filename-asc.
     Only includes rows where is_deleted=False AND the file still exists on disk.
     """
     with SessionLocal() as db:
@@ -131,9 +134,52 @@ def get_chunks_for_user(discord_id: str) -> dict:
         )
     result: dict = {}
     for row in rows:
-        if os.path.exists(row.filepath):           # double-check file is on disk
-            result.setdefault(row.date, []).append(row.filename)
+        if os.path.exists(row.filepath):
+            result.setdefault(row.date, []).append({
+                "filename": row.filename,
+                "transcription": row.transcription,  # None if not yet transcribed
+            })
     return result
+
+
+def get_pending_chunks() -> list:
+    """
+    Returns all chunks that have no transcription yet (transcription IS NULL)
+    and are not deleted and still exist on disk.
+    Used by the remote transcription script.
+    """
+    with SessionLocal() as db:
+        rows = (
+            db.query(Chunk)
+            .filter(Chunk.is_deleted == False, Chunk.transcription == None)
+            .order_by(Chunk.date.asc(), Chunk.filename.asc())
+            .all()
+        )
+    result = []
+    for row in rows:
+        if os.path.exists(row.filepath):
+            result.append({
+                "discord_id": row.discord_id,
+                "date": row.date,
+                "filename": row.filename,
+            })
+    return result
+
+
+def set_transcription(discord_id: str, date: str, filename: str, text: str) -> bool:
+    """
+    Save transcription text for a chunk.
+    Returns True on success, False if the chunk wasn't found or doesn't belong to this user.
+    """
+    chunk_id = f"{discord_id}:{date}:{filename}"
+    with SessionLocal() as db:
+        row = db.get(Chunk, chunk_id)
+        if not row or row.discord_id != discord_id or row.is_deleted:
+            return False
+        row.transcription = text
+        row.transcribed_at = datetime.utcnow()
+        db.commit()
+    return True
 
 
 def delete_chunk(discord_id: str, date: str, filename: str) -> str | None:
