@@ -1,5 +1,5 @@
 import os
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from sqlalchemy import create_engine, Column, String, Boolean, DateTime, Text, ForeignKey, UniqueConstraint, Float
 from sqlalchemy.orm import declarative_base, sessionmaker
 
@@ -15,7 +15,7 @@ class User(Base):
     discord_id = Column(String, primary_key=True)
     username = Column(String, nullable=False)
     avatar_url = Column(String)
-    last_login = Column(DateTime, default=datetime.utcnow)
+    last_login = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
 
 class AudioFile(Base):
@@ -26,7 +26,7 @@ class AudioFile(Base):
     username = Column(String)
     filename = Column(String, nullable=False)
     filepath = Column(Text, nullable=False)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
     is_deleted = Column(Boolean, default=False)
 
 
@@ -42,7 +42,7 @@ class Chunk(Base):
     date = Column(String, nullable=False)           # "YYYY-MM-DD"
     filename = Column(String, nullable=False)       # "chunk_001.wav"
     filepath = Column(Text, nullable=False)         # absolute path on disk
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
     is_deleted = Column(Boolean, default=False)
     transcription = Column(Text, nullable=True, default=None)   # whisper output
     transcribed_at = Column(DateTime, nullable=True, default=None)
@@ -61,13 +61,13 @@ def upsert_user(discord_id: str, username: str, avatar_url: str):
         if user:
             user.username = username
             user.avatar_url = avatar_url
-            user.last_login = datetime.utcnow()
+            user.last_login = datetime.now(timezone.utc)
         else:
             user = User(
                 discord_id=discord_id,
                 username=username,
                 avatar_url=avatar_url,
-                last_login=datetime.utcnow()
+                last_login=datetime.now(timezone.utc)
             )
             db.add(user)
         db.commit()
@@ -153,7 +153,7 @@ def release_stale_claims():
     CLAIM_TIMEOUT_MINUTES ago but still has no transcription.
     Called periodically by the server background thread.
     """
-    cutoff = datetime.utcnow() - timedelta(minutes=CLAIM_TIMEOUT_MINUTES)
+    cutoff = datetime.now(timezone.utc) - timedelta(minutes=CLAIM_TIMEOUT_MINUTES)
     with SessionLocal() as db:
         stale = (
             db.query(Chunk)
@@ -183,7 +183,7 @@ def claim_chunks(machine_id: str, batch_size: int = 20) -> list:
     Already existing claims by THIS machine are also returned so it can
     resume a partially-processed batch.
     """
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     with SessionLocal() as db:
         # Also return chunks already claimed by this machine (resume support)
         rows = (
@@ -247,7 +247,7 @@ def set_transcription(discord_id: str, date: str, filename: str, text: str) -> b
         if not row or row.discord_id != discord_id or row.is_deleted:
             return False
         row.transcription = text
-        row.transcribed_at = datetime.utcnow()
+        row.transcribed_at = datetime.now(timezone.utc)
         row.claimed_by = None   # release the claim
         row.claimed_at = None
         db.commit()
