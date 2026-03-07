@@ -185,13 +185,16 @@ def claim_chunks(machine_id: str, batch_size: int = 20) -> list:
     """
     now = datetime.now(timezone.utc)
     with SessionLocal() as db:
-        # Also return chunks already claimed by this machine (resume support)
+        # Only claim free (unclaimed) chunks — already-claimed chunks (even by
+        # this machine) are excluded so we never hand the same chunk twice
+        # during active processing. Stale claims are released by the background
+        # thread after CLAIM_TIMEOUT_MINUTES, at which point they become free again.
         rows = (
             db.query(Chunk)
             .filter(
                 Chunk.is_deleted == False,
                 Chunk.transcription == None,
-                (Chunk.claimed_by == None) | (Chunk.claimed_by == machine_id),
+                Chunk.claimed_by == None,
             )
             .order_by(Chunk.date.asc(), Chunk.filename.asc())
             .limit(batch_size)
