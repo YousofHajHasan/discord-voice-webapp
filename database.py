@@ -1,5 +1,5 @@
 import os
-from datetime import datetime
+from datetime import datetime, timedelta
 from sqlalchemy import create_engine, Column, String, Boolean, DateTime, Text, ForeignKey, UniqueConstraint, Float
 from sqlalchemy.orm import declarative_base, sessionmaker
 
@@ -46,6 +46,8 @@ class Chunk(Base):
     is_deleted = Column(Boolean, default=False)
     transcription = Column(Text, nullable=True, default=None)   # whisper output
     transcribed_at = Column(DateTime, nullable=True, default=None)
+    claimed_by = Column(String, nullable=True, default=None)    # machine_id holding this chunk
+    claimed_at = Column(DateTime, nullable=True, default=None)  # when the claim was made
 
 
 def init_db():
@@ -142,11 +144,78 @@ def get_chunks_for_user(discord_id: str) -> dict:
     return result
 
 
+CLAIM_TIMEOUT_MINUTES = 5  # reclaim chunks not transcribed within this time
+
+
+def release_stale_claims():
+    """
+    Reset claimed_by/claimed_at for any chunk that was claimed more than
+    CLAIM_TIMEOUT_MINUTES ago but still has no transcription.
+    Called periodically by the server background thread.
+    """
+    cutoff = datetime.utcnow() - timedelta(minutes=CLAIM_TIMEOUT_MINUTES)
+    with SessionLocal() as db:
+        stale = (
+            db.query(Chunk)
+            .filter(
+                Chunk.claimed_by != None,
+                Chunk.claimed_at < cutoff,
+                Chunk.transcription == None,
+            )
+            .all()
+        )
+        count = len(stale)
+        for row in stale:
+            row.claimed_by = None
+            row.claimed_at = None
+        if count:
+            db.commit()
+    return count
+
+
+def claim_chunks(machine_id: str, batch_size: int = 20) -> list:
+    """
+    Atomically claims up to batch_size unclaimed, un-transcribed chunks for
+    machine_id and returns them. A chunk is available if:
+      - is_deleted = False
+      - transcription IS NULL
+      - claimed_by IS NULL  (not already held by another machine)
+    Already existing claims by THIS machine are also returned so it can
+    resume a partially-processed batch.
+    """
+    now = datetime.utcnow()
+    with SessionLocal() as db:
+        # Also return chunks already claimed by this machine (resume support)
+        rows = (
+            db.query(Chunk)
+            .filter(
+                Chunk.is_deleted == False,
+                Chunk.transcription == None,
+                (Chunk.claimed_by == None) | (Chunk.claimed_by == machine_id),
+            )
+            .order_by(Chunk.date.asc(), Chunk.filename.asc())
+            .limit(batch_size)
+            .all()
+        )
+        result = []
+        for row in rows:
+            if os.path.exists(row.filepath):
+                row.claimed_by = machine_id
+                row.claimed_at = now
+                result.append({
+                    "discord_id": row.discord_id,
+                    "date": row.date,
+                    "filename": row.filename,
+                })
+        if result:
+            db.commit()
+    return result
+
+
 def get_pending_chunks() -> list:
     """
-    Returns all chunks that have no transcription yet (transcription IS NULL)
-    and are not deleted and still exist on disk.
-    Used by the remote transcription script.
+    Returns all chunks that have no transcription yet (for the /pending endpoint).
+    Does NOT claim them — use claim_chunks() for actual processing.
     """
     with SessionLocal() as db:
         rows = (
@@ -162,13 +231,14 @@ def get_pending_chunks() -> list:
                 "discord_id": row.discord_id,
                 "date": row.date,
                 "filename": row.filename,
+                "claimed_by": row.claimed_by,
             })
     return result
 
 
 def set_transcription(discord_id: str, date: str, filename: str, text: str) -> bool:
     """
-    Save transcription text for a chunk.
+    Save transcription text for a chunk and clear its claim.
     Returns True on success, False if the chunk wasn't found or doesn't belong to this user.
     """
     chunk_id = f"{discord_id}:{date}:{filename}"
@@ -178,6 +248,8 @@ def set_transcription(discord_id: str, date: str, filename: str, text: str) -> b
             return False
         row.transcription = text
         row.transcribed_at = datetime.utcnow()
+        row.claimed_by = None   # release the claim
+        row.claimed_at = None
         db.commit()
     return True
 

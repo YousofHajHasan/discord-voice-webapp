@@ -13,7 +13,7 @@ from auth import get_discord_oauth_url, exchange_code, get_discord_user
 from database import (
     init_db, upsert_user, log_audio_file,
     register_chunk, get_chunks_for_user, delete_chunk,
-    get_pending_chunks, set_transcription,
+    get_pending_chunks, claim_chunks, set_transcription, release_stale_claims,
 )
 
 logging.basicConfig(
@@ -76,6 +76,11 @@ def _scan_and_register_all_chunks():
                     if date_dir.is_dir():
                         for wav in date_dir.glob("chunk_*.wav"):
                             register_chunk(discord_id, date_dir.name, wav.name, str(wav))
+
+            # Release any claims that have been held for too long
+            freed = release_stale_claims()
+            if freed:
+                logger.info(f"Background: released {freed} stale chunk claim(s)")
         except Exception as e:
             logger.error(f"Background chunk scan error: {e}")
 
@@ -291,12 +296,32 @@ async def script_pending_chunks(request: Request):
     """
     Returns all chunks that have no transcription yet.
     Used by the remote transcription script to know what to process next.
-    Response: { "pending": [{"discord_id", "date", "filename"}, ...] }
+    Response: { "pending": [{"discord_id", "date", "filename", "claimed_by"}, ...] }
     """
     _require_api_key(request)
     pending = get_pending_chunks()
     logger.info(f"Pending chunks requested — {len(pending)} items returned")
     return {"pending": pending}
+
+
+@app.post("/api/script/chunks/claim")
+async def script_claim_chunks(request: Request):
+    """
+    Atomically claims up to `batch_size` unclaimed chunks for the given machine_id.
+    Already-claimed chunks by the same machine are also returned (resume support).
+    Body: { "machine_id": "my-pc", "batch_size": 20 }
+    Response: { "claimed": [{"discord_id", "date", "filename"}, ...] }
+    """
+    _require_api_key(request)
+    body = await request.json()
+    machine_id = body.get("machine_id", "").strip()
+    if not machine_id:
+        raise HTTPException(status_code=422, detail="'machine_id' is required")
+    batch_size = min(int(body.get("batch_size", 20)), 100)  # cap at 100
+
+    claimed = claim_chunks(machine_id, batch_size)
+    logger.info(f"Claim: machine '{machine_id}' claimed {len(claimed)} chunks")
+    return {"claimed": claimed}
 
 
 @app.get("/api/script/download/{user_id}/{date}/{filename}")
