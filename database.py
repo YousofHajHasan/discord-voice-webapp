@@ -228,8 +228,11 @@ def claim_chunks(machine_id: str, batch_size: int = 20) -> list:
             .all()
         )
         result = []
+        needs_commit = False
+        
         for row in rows:
             if _resolve_filepath(row) is not None:
+                # File exists, claim it normally
                 row.claimed_by = machine_id
                 row.claimed_at = now
                 result.append({
@@ -237,10 +240,16 @@ def claim_chunks(machine_id: str, batch_size: int = 20) -> list:
                     "date": row.date,
                     "filename": row.filename,
                 })
-        if result:
-            db.commit()
-    return result
+                needs_commit = True
+            else:
+                # FILE IS MISSING: Mark it as deleted to prevent queue jams
+                row.is_deleted = True
+                needs_commit = True
 
+        if needs_commit:
+            db.commit()
+            
+    return result
 
 def get_pending_chunks() -> list:
     """
