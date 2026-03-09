@@ -65,10 +65,9 @@ def _scan_and_register_all_chunks():
             for user_dir in RECORDINGS_PATH.iterdir():
                 if not user_dir.is_dir():
                     continue
-                parts = user_dir.name.rsplit("_", 1)
-                if len(parts) != 2:
-                    continue
-                discord_id = parts[1]
+                discord_id = user_dir.name
+                if not discord_id.isdigit():
+                    continue  # skip anything that's not a pure numeric ID folder
                 chunks_root = user_dir / "chunks"
                 if not chunks_root.exists():
                     continue
@@ -92,10 +91,9 @@ async def startup():
         for user_dir in RECORDINGS_PATH.iterdir():
             if not user_dir.is_dir():
                 continue
-            parts = user_dir.name.rsplit("_", 1)
-            if len(parts) != 2:
-                continue
-            discord_id = parts[1]
+            discord_id = user_dir.name
+            if not discord_id.isdigit():
+                continue  # skip anything that's not a pure numeric ID folder
 
             # Register processed VAD chunks
             chunks_root = user_dir / "chunks"
@@ -198,7 +196,7 @@ async def serve_chunk(user_id: str, date: str, filename: str, request: Request):
     audio_file = None
     if RECORDINGS_PATH.exists():
         for user_dir in RECORDINGS_PATH.iterdir():
-            if user_dir.name.endswith(f"_{user_id}"):
+            if user_dir.name == user_id:
                 candidate = user_dir / "chunks" / date / filename
                 if candidate.exists():
                     audio_file = candidate
@@ -338,7 +336,7 @@ async def script_download_chunk(user_id: str, date: str, filename: str, request:
     audio_file = None
     if RECORDINGS_PATH.exists():
         for user_dir in RECORDINGS_PATH.iterdir():
-            if user_dir.name.endswith(f"_{user_id}"):
+            if user_dir.name == user_id:
                 candidate = user_dir / "chunks" / date / filename
                 if candidate.exists():
                     audio_file = candidate
