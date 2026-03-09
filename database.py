@@ -8,6 +8,8 @@ engine = create_engine(f"sqlite:///{DB_PATH}", connect_args={"check_same_thread"
 SessionLocal = sessionmaker(bind=engine)
 Base = declarative_base()
 
+RECORDINGS_PATH = os.environ.get("RECORDINGS_PATH", "/app/recordings")
+
 
 class User(Base):
     __tablename__ = "users"
@@ -121,11 +123,46 @@ def register_chunk(discord_id: str, date: str, filename: str, filepath: str):
             db.commit()
 
 
+def _heal_filepath(row_id: str, new_path: str):
+    """
+    Silently update a stale filepath in the DB so future lookups are instant.
+    Called when a stored path no longer exists but the file was found at the
+    new ID-only folder location (after the username_id -> id rename migration).
+    """
+    with SessionLocal() as db:
+        row = db.get(Chunk, row_id)
+        if row:
+            row.filepath = new_path
+            db.commit()
+
+
+def _resolve_filepath(row) -> str | None:
+    """
+    Returns the real filepath for a chunk row, healing stale paths if needed.
+    Returns None if the file genuinely doesn't exist anywhere.
+    """
+    # Fast path — stored path is still valid
+    if os.path.exists(row.filepath):
+        return row.filepath
+
+    # Slow path — try the new ID-only folder structure
+    new_path = os.path.join(
+        RECORDINGS_PATH, row.discord_id, "chunks", row.date, row.filename
+    )
+    if os.path.exists(new_path):
+        _heal_filepath(row.id, new_path)
+        return new_path
+
+    # File genuinely missing
+    return None
+
+
 def get_chunks_for_user(discord_id: str) -> dict:
     """
     Returns { "YYYY-MM-DD": [{"filename": "chunk_001.wav", "transcription": "..."}, ...] }
     ordered date-desc, filename-asc.
     Only includes rows where is_deleted=False AND the file still exists on disk.
+    Heals stale filepaths transparently for rows created before the folder rename.
     """
     with SessionLocal() as db:
         rows = (
@@ -136,22 +173,21 @@ def get_chunks_for_user(discord_id: str) -> dict:
         )
     result: dict = {}
     for row in rows:
-        if os.path.exists(row.filepath):
+        if _resolve_filepath(row) is not None:
             result.setdefault(row.date, []).append({
                 "filename": row.filename,
-                "transcription": row.transcription,  # None if not yet transcribed
+                "transcription": row.transcription,
             })
     return result
 
 
-CLAIM_TIMEOUT_MINUTES = 5  # reclaim chunks not transcribed within this time
+CLAIM_TIMEOUT_MINUTES = 5
 
 
 def release_stale_claims():
     """
     Reset claimed_by/claimed_at for any chunk that was claimed more than
     CLAIM_TIMEOUT_MINUTES ago but still has no transcription.
-    Called periodically by the server background thread.
     """
     cutoff = datetime.now(timezone.utc) - timedelta(minutes=CLAIM_TIMEOUT_MINUTES)
     with SessionLocal() as db:
@@ -176,19 +212,10 @@ def release_stale_claims():
 def claim_chunks(machine_id: str, batch_size: int = 20) -> list:
     """
     Atomically claims up to batch_size unclaimed, un-transcribed chunks for
-    machine_id and returns them. A chunk is available if:
-      - is_deleted = False
-      - transcription IS NULL
-      - claimed_by IS NULL  (not already held by another machine)
-    Already existing claims by THIS machine are also returned so it can
-    resume a partially-processed batch.
+    machine_id and returns them.
     """
     now = datetime.now(timezone.utc)
     with SessionLocal() as db:
-        # Only claim free (unclaimed) chunks — already-claimed chunks (even by
-        # this machine) are excluded so we never hand the same chunk twice
-        # during active processing. Stale claims are released by the background
-        # thread after CLAIM_TIMEOUT_MINUTES, at which point they become free again.
         rows = (
             db.query(Chunk)
             .filter(
@@ -202,7 +229,7 @@ def claim_chunks(machine_id: str, batch_size: int = 20) -> list:
         )
         result = []
         for row in rows:
-            if os.path.exists(row.filepath):
+            if _resolve_filepath(row) is not None:
                 row.claimed_by = machine_id
                 row.claimed_at = now
                 result.append({
@@ -218,7 +245,6 @@ def claim_chunks(machine_id: str, batch_size: int = 20) -> list:
 def get_pending_chunks() -> list:
     """
     Returns all chunks that have no transcription yet (for the /pending endpoint).
-    Does NOT claim them — use claim_chunks() for actual processing.
     """
     with SessionLocal() as db:
         rows = (
@@ -229,7 +255,7 @@ def get_pending_chunks() -> list:
         )
     result = []
     for row in rows:
-        if os.path.exists(row.filepath):
+        if _resolve_filepath(row) is not None:
             result.append({
                 "discord_id": row.discord_id,
                 "date": row.date,
@@ -242,7 +268,6 @@ def get_pending_chunks() -> list:
 def set_transcription(discord_id: str, date: str, filename: str, text: str) -> bool:
     """
     Save transcription text for a chunk and clear its claim.
-    Returns True on success, False if the chunk wasn't found or doesn't belong to this user.
     """
     chunk_id = f"{discord_id}:{date}:{filename}"
     with SessionLocal() as db:
@@ -251,7 +276,7 @@ def set_transcription(discord_id: str, date: str, filename: str, text: str) -> b
             return False
         row.transcription = text
         row.transcribed_at = datetime.now(timezone.utc)
-        row.claimed_by = None   # release the claim
+        row.claimed_by = None
         row.claimed_at = None
         db.commit()
     return True
@@ -260,22 +285,22 @@ def set_transcription(discord_id: str, date: str, filename: str, text: str) -> b
 def delete_chunk(discord_id: str, date: str, filename: str) -> str | None:
     """
     Hard-delete: removes the file from disk and marks the DB row is_deleted=True.
-    Returns the filepath on success, None if the row wasn't found or doesn't belong
-    to this user.
+    Heals stale filepath before attempting deletion if needed.
+    Returns the filepath on success, None if not found.
     """
     chunk_id = f"{discord_id}:{date}:{filename}"
     with SessionLocal() as db:
         row = db.get(Chunk, chunk_id)
         if not row or row.discord_id != discord_id:
             return None
-        filepath = row.filepath
-        # Delete file from disk
+
+        filepath = _resolve_filepath(row)
         try:
-            if os.path.exists(filepath):
+            if filepath and os.path.exists(filepath):
                 os.remove(filepath)
         except OSError:
             pass
-        # Mark deleted in DB
+
         row.is_deleted = True
         db.commit()
-    return filepath
+    return filepath or row.filepath
