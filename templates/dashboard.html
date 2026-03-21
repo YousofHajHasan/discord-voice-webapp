@@ -134,6 +134,18 @@
         .chunk-mini-fill { height: 100%; background: var(--green); border-radius: 1px; width: 0%; transition: width 0.1s linear; }
         .chunk-dur { font-size: 11px; color: var(--muted); flex-shrink: 0; min-width: 36px; text-align: right; }
 
+        /* DOWNLOAD BUTTON */
+        .chunk-dl-btn {
+            width: 26px; height: 26px; border-radius: 6px; border: none;
+            flex-shrink: 0; cursor: pointer; transition: all 0.2s;
+            display: flex; align-items: center; justify-content: center;
+            background: transparent; opacity: 0; text-decoration: none;
+        }
+        .chunk-dl-btn svg { width: 13px; height: 13px; fill: var(--muted); transition: fill 0.15s; }
+        .chunk-row:hover .chunk-dl-btn { opacity: 1; }
+        .chunk-dl-btn:hover { background: rgba(88,101,242,0.12); }
+        .chunk-dl-btn:hover svg { fill: var(--accent); }
+
         /* DELETE BUTTON */
         .chunk-del-btn {
             width: 26px; height: 26px; border-radius: 6px; border: none;
@@ -183,13 +195,19 @@
         .date-pill.live-pill { border-color: rgba(34,197,94,0.3); color: var(--green); }
         .date-pill.live-pill.active { background: var(--green-subtle); border-color: var(--green); }
 
-        /* SHOW MORE */
-        .show-more-btn {
-            width: 100%; padding: 11px; border: none; background: var(--surface-2);
-            color: var(--muted); font-family: 'DM Mono', monospace; font-size: 12px;
-            cursor: pointer; transition: all 0.15s; border-top: 1px solid var(--border);
+        /* SHOW MORE / SHOW ALL */
+        .pagination-bar {
+            display: flex; border-top: 1px solid var(--border);
         }
-        .show-more-btn:hover { color: var(--text); background: var(--border); }
+        .show-more-btn, .show-all-btn {
+            flex: 1; padding: 11px; border: none; background: var(--surface-2);
+            color: var(--muted); font-family: 'DM Mono', monospace; font-size: 12px;
+            cursor: pointer; transition: all 0.15s;
+        }
+        .show-more-btn:hover, .show-all-btn:hover { color: var(--text); background: var(--border); }
+        .show-more-btn { border-right: 1px solid var(--border); }
+        .show-all-btn { color: var(--accent); }
+        .show-all-btn:hover { color: var(--text); }
     </style>
 </head>
 <body>
@@ -291,6 +309,7 @@
     // ── Render chunks section ─────────────────────────────────────────────────
     const PAGE_SIZE  = 50;
     let activeFilter = 'all';
+    // shownCount[date] = number currently shown, or Infinity when "show all" clicked
     const shownCount = {};
 
     function renderFilterPills(data) {
@@ -317,8 +336,9 @@
     }
 
     function buildChunkRow(date, chunk, idx) {
-        const name = chunk.filename;
-        const tx   = chunk.transcription;
+        const name   = chunk.filename;
+        const tx     = chunk.transcription;
+        const dlUrl  = '/recordings/audio/' + USER_ID + '/chunks/' + date + '/' + name;
         const txHtml = tx
             ? `<div class="chunk-transcription">${escapeHtml(tx)}</div>`
             : `<div class="chunk-transcription none">No transcription yet</div>`;
@@ -339,6 +359,13 @@
                 </div>
             </div>
             <span class="chunk-dur" id="dur-${date}-${idx}">--:--</span>
+            <a  class="chunk-dl-btn"
+                href="${dlUrl}"
+                download="${name}"
+                title="Download chunk"
+                onclick="event.stopPropagation()">
+                <svg viewBox="0 0 24 24"><path d="M5 20h14v-2H5v2zm7-18v10.17l-3.59-3.58L7 10l5 5 5-5-1.41-1.41L13 12.17V2h-1z"/></svg>
+            </a>
             <button class="chunk-del-btn" id="del-${date}-${idx}"
                     title="Delete chunk"
                     onclick="event.stopPropagation(); confirmDelete('${date}','${name}',${idx})">
@@ -353,19 +380,40 @@
 
     function showMore(date) {
         shownCount[date] = (shownCount[date] || PAGE_SIZE) + PAGE_SIZE;
-        const chunks = chunksData[date] || [];
-        const shown  = Math.min(shownCount[date], chunks.length);
+        _rerenderRows(date);
+    }
+
+    function showAll(date) {
+        shownCount[date] = Infinity;
+        _rerenderRows(date);
+    }
+
+    function _rerenderRows(date) {
+        const chunks    = chunksData[date] || [];
+        const limit     = shownCount[date] || PAGE_SIZE;
+        const shown     = limit === Infinity ? chunks.length : Math.min(limit, chunks.length);
+        const remaining = chunks.length - shown;
 
         const container = document.getElementById('rows-' + date);
         if (!container) return;
+
         let rows = '';
         for (let i = 0; i < shown; i++) rows += buildChunkRow(date, chunks[i], i);
-        const remaining = chunks.length - shown;
-        const moreBtn   = remaining > 0
-            ? `<button class="show-more-btn" onclick="showMore('${date}')">
-                   Show ${Math.min(remaining, PAGE_SIZE)} more  (${remaining} remaining)
-               </button>` : '';
-        container.innerHTML = rows + moreBtn;
+        container.innerHTML = rows + buildPaginationBar(date, remaining, chunks.length);
+    }
+
+    function buildPaginationBar(date, remaining, total) {
+        if (remaining <= 0) return '';
+        const nextPage = Math.min(remaining, PAGE_SIZE);
+        return `
+        <div class="pagination-bar">
+            <button class="show-more-btn" onclick="showMore('${date}')">
+                Show ${nextPage} more &nbsp;(${remaining} remaining)
+            </button>
+            <button class="show-all-btn" onclick="showAll('${date}')">
+                Show all ${total}
+            </button>
+        </div>`;
     }
 
     function renderChunks(data) {
@@ -391,7 +439,8 @@
         dates.forEach(date => {
             const chunks    = data[date] || [];
             const isToday   = date === today;
-            const shown     = Math.min(shownCount[date] || PAGE_SIZE, chunks.length);
+            const limit     = shownCount[date] || PAGE_SIZE;
+            const shown     = limit === Infinity ? chunks.length : Math.min(limit, chunks.length);
             const remaining = chunks.length - shown;
 
             const badgeHtml = isToday
@@ -400,11 +449,6 @@
 
             let rows = '';
             for (let i = 0; i < shown; i++) rows += buildChunkRow(date, chunks[i], i);
-
-            const moreBtn = remaining > 0
-                ? `<button class="show-more-btn" onclick="showMore('${date}')">
-                       Show ${Math.min(remaining, PAGE_SIZE)} more  (${remaining} remaining)
-                   </button>` : '';
 
             const liveRow = isToday
                 ? `<div class="live-row"><div class="live-dot"></div>Scanning for new speech…</div>`
@@ -419,7 +463,7 @@
                 <div class="chunks-list">
                     ${chunks.length === 0
                         ? `<div style="padding:16px 20px;color:var(--muted);font-size:12px;">Processing in progress…</div>`
-                        : `<div id="rows-${date}">${rows}${moreBtn}</div>`}
+                        : `<div id="rows-${date}">${rows}${buildPaginationBar(date, remaining, chunks.length)}</div>`}
                     ${liveRow}
                 </div>
             </div>`;
