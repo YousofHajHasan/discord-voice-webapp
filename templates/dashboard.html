@@ -125,6 +125,7 @@
 
         .chunk-info { flex: 1; min-width: 0; }
         .chunk-name { font-size: 12px; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .verified-tick { color: var(--green); font-weight: 700; }
         .chunk-transcription {
             font-size: 11px; color: var(--muted); margin-top: 4px;
             white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
@@ -214,6 +215,8 @@
 <header>
     <div class="logo"><div class="logo-dot"></div>Recordings</div>
     <div class="user-info">
+        <a href="/recordings/validate" class="logout-btn">Validate</a>
+        <a href="/recordings/validate/submissions" class="logout-btn">My Submissions</a>
         <img src="{{ user.avatar }}" alt="{{ user.username }}" class="avatar">
         <span class="username">Logged in as <span>{{ user.username }}</span></span>
         <a href="/recordings/logout" class="logout-btn">Logout</a>
@@ -352,7 +355,7 @@
                 <svg class="icon-pause" viewBox="0 0 24 24"><path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/></svg>
             </button>
             <div class="chunk-info">
-                <div class="chunk-name">${name}</div>
+                <div class="chunk-name">${chunk.verified ? '<span class="verified-tick" title="Verified">✓</span> ' : ''}${name}</div>
                 ${txHtml}
                 <div class="chunk-mini-bar">
                     <div class="chunk-mini-fill" id="fill-${date}-${idx}"></div>

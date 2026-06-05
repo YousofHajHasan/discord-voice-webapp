@@ -1,0 +1,64 @@
+/* ──────────────────────────────────────────────────────────────────────────
+   Reusable chunk-editor component (ChunkEditor in chunk_editor.js).
+   Used by both the validate page and the submissions modal.
+   ────────────────────────────────────────────────────────────────────────── */
+.ce {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 18px; padding: 22px; display: flex; flex-direction: column; gap: 18px;
+}
+
+.ce-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.ce-file { font-size: 13px; color: var(--text); font-weight: 500; }
+.ce-file .ce-date { color: var(--muted); margin-left: 8px; font-size: 11px; }
+
+/* Player row: play button + waveform + time */
+.ce-player { display: flex; align-items: center; gap: 14px; }
+.ce-play {
+    width: 44px; height: 44px; flex-shrink: 0; border-radius: 50%; cursor: pointer;
+    border: 1px solid rgba(34,197,94,0.25); background: var(--green-subtle);
+    display: flex; align-items: center; justify-content: center; transition: all 0.15s;
+}
+.ce-play:hover { background: rgba(34,197,94,0.16); }
+.ce-play svg { width: 16px; height: 16px; fill: var(--green); }
+.ce-play.playing { background: var(--green); border-color: var(--green); }
+.ce-play.playing svg { fill: #fff; }
+.ce-play .icon-pause { display: none; }
+.ce-play.playing .icon-play { display: none; }
+.ce-play.playing .icon-pause { display: block; }
+
+.ce-wave {
+    flex: 1; height: 56px; min-width: 0; cursor: pointer;
+    background: var(--surface-2); border: 1px solid var(--border); border-radius: 10px;
+}
+.ce-time { font-size: 11px; color: var(--muted); flex-shrink: 0; min-width: 78px; text-align: right; }
+
+/* Transcription box */
+.ce-text-label { font-size: 11px; text-transform: uppercase; letter-spacing: 1.2px; color: var(--muted); margin-bottom: -8px; }
+.ce-text {
+    width: 100%; min-height: 96px; resize: vertical;
+    background: var(--surface-2); color: var(--text);
+    border: 1px solid var(--border); border-radius: 12px; padding: 14px;
+    font-family: 'DM Mono', monospace; font-size: 14px; line-height: 1.6;
+    transition: border-color 0.15s;
+}
+.ce-text:focus { outline: none; border-color: var(--accent); }
+.ce-text::placeholder { color: var(--muted); opacity: 0.7; }
+
+/* Actions */
+.ce-actions { display: flex; gap: 12px; }
+.ce-btn {
+    flex: 1; padding: 13px; border-radius: 12px; cursor: pointer;
+    font-family: 'Syne', sans-serif; font-weight: 700; font-size: 14px;
+    border: 1px solid var(--border); background: var(--surface-2); color: var(--text);
+    transition: all 0.15s;
+}
+.ce-btn:disabled { opacity: 0.5; cursor: default; }
+.ce-accept { border-color: rgba(34,197,94,0.3); background: var(--green-subtle); color: var(--green); }
+.ce-accept:hover:not(:disabled) { background: var(--green); color: #fff; border-color: var(--green); }
+.ce-issue { border-color: rgba(245,158,11,0.3); background: var(--gold-subtle); color: var(--gold); }
+.ce-issue:hover:not(:disabled) { background: var(--gold); color: #1a1a1a; border-color: var(--gold); }
+.ce-reject { border-color: rgba(239,68,68,0.3); background: var(--red-subtle); color: var(--red); }
+.ce-reject:hover:not(:disabled) { background: var(--red); color: #fff; border-color: var(--red); }
+
+/* Auto-RTL: Arabic transcriptions read right-to-left */
+.ce-text[dir="rtl"] { text-align: right; }

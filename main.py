@@ -15,6 +15,7 @@ from database import (
     register_chunk, get_chunks_for_user, delete_chunk,
     get_pending_chunks, claim_chunks, set_transcription, release_stale_claims,
 )
+from validate import router as validate_router
 
 logging.basicConfig(
     level=logging.INFO,
@@ -34,6 +35,12 @@ app.add_middleware(
 )
 
 templates = Jinja2Templates(directory="templates")
+
+# Validation / dataset-building feature (separate, self-contained module).
+# It also serves the shared static assets via a plain route (see validate.py) —
+# a StaticFiles mount is avoided on purpose because Mounts mis-handle the app's
+# root_path="/recordings" prefix, whereas normal routes do not.
+app.include_router(validate_router)
 
 RECORDINGS_PATH = Path(os.environ.get("RECORDINGS_PATH", "/app/recordings"))
 TRANSCRIPTION_API_KEY = os.environ.get("TRANSCRIPTION_API_KEY", "")

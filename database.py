@@ -1,6 +1,6 @@
 import os
 from datetime import datetime, timedelta, timezone
-from sqlalchemy import create_engine, Column, String, Boolean, DateTime, Text, ForeignKey, UniqueConstraint, Float
+from sqlalchemy import create_engine, Column, String, Boolean, DateTime, Text, ForeignKey, UniqueConstraint, Float, inspect, text
 from sqlalchemy.orm import declarative_base, sessionmaker
 
 DB_PATH = os.environ.get("DB_PATH", "/app/db/recordings.db")
@@ -51,10 +51,71 @@ class Chunk(Base):
     claimed_by = Column(String, nullable=True, default=None)    # machine_id holding this chunk
     claimed_at = Column(DateTime, nullable=True, default=None)  # when the claim was made
 
+    # ── Validation / dataset-building fields ──────────────────────────────────
+    # validation_status: "pending" (untouched) | "verified" (human-accepted) |
+    # "rejected" (human soft-rejected — file kept on disk, hidden everywhere).
+    validation_status = Column(String, default="pending")
+    # Human-confirmed transcription. Kept SEPARATE from `transcription` (the raw
+    # ASR/whisper output) so the dataset can compare machine vs human text.
+    verified_transcription = Column(Text, nullable=True, default=None)
+    validated_at = Column(DateTime, nullable=True, default=None)
+    validated_by = Column(String, nullable=True, default=None)  # discord_id who acted
+
+
+class AccessGrant(Base):
+    """
+    Lets `delegate_id` validate `owner_id`'s chunks. No UI yet — rows are
+    created via grant_access() (or directly in the DB). The validation queue
+    and audio endpoints consult this so a user can delegate their voices.
+    """
+    __tablename__ = "access_grants"
+    __table_args__ = (
+        UniqueConstraint("owner_id", "delegate_id", name="uq_grant"),
+    )
+
+    id = Column(String, primary_key=True)            # "{owner_id}:{delegate_id}"
+    owner_id = Column(String, nullable=False)        # whose voices are shared
+    delegate_id = Column(String, nullable=False)     # who is granted access
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+
+
+# Columns that may be missing on an older live `chunks` table. Maps column name
+# -> the type clause used in "ALTER TABLE chunks ADD COLUMN <name> <clause>".
+_CHUNK_COLUMN_MIGRATIONS = {
+    "validation_status":      "VARCHAR DEFAULT 'pending'",
+    "verified_transcription": "TEXT",
+    "validated_at":           "DATETIME",
+    "validated_by":           "VARCHAR",
+}
+
+
+def _run_light_migrations():
+    """
+    Idempotent, additive-only schema healing for SQLite.
+
+    create_all() creates *missing tables* but never alters an existing one, so
+    columns added to a model after its table already exists on disk would be
+    silently absent. This adds any such columns via ALTER TABLE ADD COLUMN.
+    Safe to run on every startup: it only adds columns that don't yet exist and
+    never drops, renames, or rewrites data. (When non-additive changes are
+    needed later, graduate to a real migration tool like Alembic.)
+    """
+    insp = inspect(engine)
+    if "chunks" not in insp.get_table_names():
+        return
+    existing = {col["name"] for col in insp.get_columns("chunks")}
+    missing = {n: ddl for n, ddl in _CHUNK_COLUMN_MIGRATIONS.items() if n not in existing}
+    if not missing:
+        return
+    with engine.begin() as conn:
+        for name, ddl in missing.items():
+            conn.execute(text(f"ALTER TABLE chunks ADD COLUMN {name} {ddl}"))
+
 
 def init_db():
     os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
     Base.metadata.create_all(engine)
+    _run_light_migrations()
 
 
 def upsert_user(discord_id: str, username: str, avatar_url: str):
@@ -167,16 +228,28 @@ def get_chunks_for_user(discord_id: str) -> dict:
     with SessionLocal() as db:
         rows = (
             db.query(Chunk)
-            .filter(Chunk.discord_id == discord_id, Chunk.is_deleted == False)
+            .filter(
+                Chunk.discord_id == discord_id,
+                Chunk.is_deleted == False,
+                # Hide both rejected and issue clips — dashboard shows only
+                # pending (awaiting review) and verified (accepted) chunks.
+                Chunk.validation_status.in_(["pending", "verified"]),
+            )
             .order_by(Chunk.date.desc(), Chunk.filename.asc())
             .all()
         )
     result: dict = {}
     for row in rows:
         if _resolve_filepath(row) is not None:
+            verified = row.validation_status == "verified"
+            # Once a chunk is verified, the dashboard shows the human-confirmed
+            # text (what the user saved), not the raw ASR output. Pending chunks
+            # still show the ASR transcription.
+            display = row.verified_transcription if verified else row.transcription
             result.setdefault(row.date, []).append({
                 "filename": row.filename,
-                "transcription": row.transcription,
+                "transcription": display,
+                "verified": verified,
             })
     return result
 

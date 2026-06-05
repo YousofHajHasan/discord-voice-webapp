@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Validate · {{ user.username }}</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/recordings/static/theme.css">
+    <link rel="stylesheet" href="/recordings/static/chunk_editor.css">
+    <style>
+        .vp-progress { margin-bottom: 22px; }
+        .vp-bar { height: 6px; background: var(--surface-2); border: 1px solid var(--border); border-radius: 6px; overflow: hidden; }
+        .vp-fill { height: 100%; background: var(--green); border-radius: 6px; transition: width 0.3s ease; }
+        .vp-stats { font-size: 11px; color: var(--muted); margin-top: 8px; }
+        .vp-nav { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 18px; }
+        .vp-navbtn {
+            background: var(--surface); border: 1px solid var(--border); color: var(--text);
+            padding: 10px 18px; border-radius: 10px; font-family: 'DM Mono', monospace;
+            font-size: 13px; cursor: pointer; transition: all 0.15s;
+        }
+        .vp-navbtn:hover:not(:disabled) { border-color: var(--border-hover); }
+        .vp-navbtn:disabled { opacity: 0.35; cursor: default; }
+        .vp-counter { font-size: 12px; color: var(--muted); }
+    </style>
+</head>
+<body>
+<header>
+    <div class="logo"><div class="logo-dot"></div>Validate</div>
+    <div class="nav">
+        <a href="/recordings/dashboard" class="nav-link">Dashboard</a>
+        <a href="/recordings/validate" class="nav-link active">Validate</a>
+        <a href="/recordings/validate/submissions" class="nav-link">My Submissions</a>
+        <span class="user-mini"><img src="{{ user.avatar }}" alt="{{ user.username }}"></span>
+        <a href="/recordings/logout" class="logout-btn">Logout</a>
+    </div>
+</header>
+
+<main>
+    <h1 class="page-title">Validate</h1>
+    <p class="page-subtitle">Listen, fix the transcription, then Accept or Delete — one chunk at a time.</p>
+
+    <div id="progress" class="vp-progress"></div>
+    <div id="banner"></div>
+    <div id="editor-host"></div>
+    <div id="nav" class="vp-nav">
+        <button id="back" class="vp-navbtn">← Back</button>
+        <span id="counter" class="vp-counter"></span>
+        <button id="fwd" class="vp-navbtn">Forward →</button>
+    </div>
+</main>
+
+<script src="/recordings/static/chunk_editor.js"></script>
+<script src="/recordings/static/validate.js"></script>
+</body>
+</html>

@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>My Submissions · {{ user.username }}</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/recordings/static/theme.css">
+    <link rel="stylesheet" href="/recordings/static/chunk_editor.css">
+    <style>
+        .sub-filters { display: flex; gap: 10px; margin-bottom: 18px; flex-wrap: wrap; align-items: center; }
+        .sub-pills { display: flex; gap: 8px; flex-wrap: wrap; }
+        .sub-pill {
+            font-size: 12px; padding: 5px 14px; border-radius: 20px; cursor: pointer;
+            border: 1px solid var(--border); background: var(--surface); color: var(--muted);
+            transition: all 0.15s; user-select: none;
+        }
+        .sub-pill:hover { border-color: var(--border-hover); color: var(--text); }
+        .sub-pill.active { background: var(--accent-subtle); border-color: var(--accent); color: var(--text); }
+        .sub-select {
+            font-family: 'DM Mono', monospace; font-size: 12px; cursor: pointer;
+            background: var(--surface); color: var(--text); border: 1px solid var(--border);
+            border-radius: 20px; padding: 6px 12px; transition: border-color 0.15s;
+        }
+        .sub-select:hover { border-color: var(--border-hover); }
+        .sub-select:focus { outline: none; border-color: var(--accent); }
+        .sub-count { font-size: 11px; color: var(--muted); margin-bottom: 12px; }
+
+        .sub-row {
+            display: flex; align-items: center; gap: 14px; padding: 14px 16px;
+            background: var(--surface); border: 1px solid var(--border); border-radius: 14px;
+            margin-bottom: 10px; cursor: pointer; transition: all 0.15s;
+        }
+        .sub-row:hover { border-color: var(--border-hover); background: var(--surface-2); }
+        .sub-status { flex-shrink: 0; min-width: 26px; text-align: center; }
+        .sub-info { flex: 1; min-width: 0; }
+        .sub-name { font-size: 13px; color: var(--text); }
+        .sub-meta { display: flex; gap: 14px; flex-wrap: wrap; margin-top: 5px; }
+        .sub-tag { font-size: 11px; color: var(--muted); }
+        .sub-snippet { font-size: 12px; color: var(--muted); margin-top: 5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .sub-empty { font-style: italic; opacity: 0.6; }
+        .sub-chev { color: var(--muted); font-size: 20px; flex-shrink: 0; }
+
+        /* Modal */
+        .modal {
+            position: fixed; inset: 0; z-index: 200; display: none;
+            align-items: center; justify-content: center; padding: 20px;
+            background: rgba(0,0,0,0.6); backdrop-filter: blur(4px);
+        }
+        .modal.open { display: flex; }
+        .modal-card { position: relative; width: 100%; max-width: 560px; }
+        .modal-close {
+            position: absolute; top: -14px; right: -6px; z-index: 2;
+            width: 34px; height: 34px; border-radius: 50%;
+            border: 1px solid var(--border); background: var(--surface); color: var(--text);
+            cursor: pointer; font-size: 15px;
+        }
+        .modal-close:hover { border-color: var(--border-hover); }
+    </style>
+</head>
+<body>
+<header>
+    <div class="logo"><div class="logo-dot"></div>Submissions</div>
+    <div class="nav">
+        <a href="/recordings/dashboard" class="nav-link">Dashboard</a>
+        <a href="/recordings/validate" class="nav-link">Validate</a>
+        <a href="/recordings/validate/submissions" class="nav-link active">My Submissions</a>
+        <span class="user-mini"><img src="{{ user.avatar }}" alt="{{ user.username }}"></span>
+        <a href="/recordings/logout" class="logout-btn">Logout</a>
+    </div>
+</header>
+
+<main>
+    <h1 class="page-title">My Submissions</h1>
+    <p class="page-subtitle">Everything you've accepted or rejected. Tap one to edit and re-decide.</p>
+
+    <div class="sub-filters">
+        <div class="sub-pills" id="status-filter"></div>
+        <select class="sub-select" id="rec-date" title="Filter by date recorded"></select>
+        <select class="sub-select" id="rev-date" title="Filter by date reviewed"></select>
+    </div>
+    <div id="list"></div>
+</main>
+
+<div class="modal" id="modal">
+    <div class="modal-card">
+        <button class="modal-close" id="modal-close">✕</button>
+        <div id="modal-editor"></div>
+    </div>
+</div>
+
+<script src="/recordings/static/chunk_editor.js"></script>
+<script src="/recordings/static/submissions.js"></script>
+</body>
+</html>

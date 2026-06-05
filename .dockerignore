@@ -1,0 +1,16 @@
+# Keep local/dev artifacts and VCS metadata OUT of the production image.
+# (The CI build context honors this file, so dev.py never ships even though
+#  it's tracked in git.)
+.venv/
+dev.py
+dev.db
+dev.db-journal
+dev_recordings/
+__pycache__/
+*.pyc
+.git/
+.github/
+.gitignore
+.dockerignore
+.env
+README.md

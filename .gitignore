@@ -1,0 +1,10 @@
+# Local dev artifacts (created by dev.py) — never deploy these
+.venv/
+dev.db
+dev.db-journal
+dev_recordings/
+
+# Python
+__pycache__/
+*.pyc
+.env
