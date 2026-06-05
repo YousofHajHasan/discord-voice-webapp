@@ -184,6 +184,38 @@ def register_chunk(discord_id: str, date: str, filename: str, filepath: str):
             db.commit()
 
 
+def bulk_register_chunks(rows) -> int:
+    """
+    Register many chunks efficiently: ONE query for existing ids, then a single
+    bulk insert + commit for the new ones. `rows` is an iterable of
+    (discord_id, date, filename, filepath). Returns the number inserted.
+
+    Replaces calling register_chunk() per file (a SELECT + INSERT + COMMIT/fsync
+    each). At thousands of chunks on a network-mounted volume, that per-file
+    fsync storm made startup take minutes; this is one transaction.
+    """
+    rows = list(rows)
+    if not rows:
+        return 0
+    with SessionLocal() as db:
+        existing = {cid for (cid,) in db.query(Chunk.id).all()}
+        new_objs = []
+        for discord_id, date, filename, filepath in rows:
+            cid = f"{discord_id}:{date}:{filename}"
+            if cid in existing:
+                continue
+            existing.add(cid)  # also dedupe within this batch
+            new_objs.append(Chunk(
+                id=cid, discord_id=discord_id, date=date,
+                filename=filename, filepath=filepath,
+            ))
+        if not new_objs:
+            return 0
+        db.bulk_save_objects(new_objs)
+        db.commit()
+    return len(new_objs)
+
+
 def _heal_filepath(row_id: str, new_path: str):
     """
     Silently update a stale filepath in the DB so future lookups are instant.

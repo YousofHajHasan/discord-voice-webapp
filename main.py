@@ -12,7 +12,7 @@ from pathlib import Path
 from auth import get_discord_oauth_url, exchange_code, get_discord_user
 from database import (
     init_db, upsert_user, log_audio_file,
-    register_chunk, get_chunks_for_user, delete_chunk,
+    bulk_register_chunks, get_chunks_for_user, delete_chunk,
     get_pending_chunks, claim_chunks, set_transcription, release_stale_claims,
 )
 from validate import router as validate_router
@@ -57,33 +57,41 @@ def _require_api_key(request: Request):
         raise HTTPException(status_code=401, detail="Invalid or missing API key")
 
 
+def _scan_disk_for_chunks():
+    """Walk RECORDINGS_PATH, returning (discord_id, date, filename, filepath) for every chunk wav."""
+    found = []
+    if not RECORDINGS_PATH.exists():
+        return found
+    for user_dir in RECORDINGS_PATH.iterdir():
+        if not user_dir.is_dir() or not user_dir.name.isdigit():
+            continue  # only pure-numeric ID folders
+        chunks_root = user_dir / "chunks"
+        if not chunks_root.exists():
+            continue
+        for date_dir in chunks_root.iterdir():
+            if not date_dir.is_dir():
+                continue
+            for wav in date_dir.glob("chunk_*.wav"):
+                found.append((user_dir.name, date_dir.name, wav.name, str(wav)))
+    return found
+
+
 def _scan_and_register_all_chunks():
     """
-    Background thread: scans every user's chunks/ folder and registers any
-    new .wav files into the DB. Runs every CHUNK_SCAN_INTERVAL seconds.
-    This is the ONLY place disk is scanned after startup — the API poll
-    endpoints just read from the DB.
+    Background thread: keeps the DB in sync with new VAD chunks. Does an
+    immediate first pass (so chunks appear shortly after boot), then repeats
+    every CHUNK_SCAN_INTERVAL seconds. Registration is bulk (one transaction),
+    so it never blocks on thousands of per-file commits.
     """
+    first = True
     while True:
-        time.sleep(CHUNK_SCAN_INTERVAL)
+        if not first:
+            time.sleep(CHUNK_SCAN_INTERVAL)
+        first = False
         try:
-            if not RECORDINGS_PATH.exists():
-                continue
-            for user_dir in RECORDINGS_PATH.iterdir():
-                if not user_dir.is_dir():
-                    continue
-                discord_id = user_dir.name
-                if not discord_id.isdigit():
-                    continue  # skip anything that's not a pure numeric ID folder
-                chunks_root = user_dir / "chunks"
-                if not chunks_root.exists():
-                    continue
-                for date_dir in chunks_root.iterdir():
-                    if date_dir.is_dir():
-                        for wav in date_dir.glob("chunk_*.wav"):
-                            register_chunk(discord_id, date_dir.name, wav.name, str(wav))
-
-            # Release any claims that have been held for too long
+            inserted = bulk_register_chunks(_scan_disk_for_chunks())
+            if inserted:
+                logger.info(f"Background: registered {inserted} new chunk(s)")
             freed = release_stale_claims()
             if freed:
                 logger.info(f"Background: released {freed} stale chunk claim(s)")
@@ -94,26 +102,12 @@ def _scan_and_register_all_chunks():
 @app.on_event("startup")
 async def startup():
     init_db()
-    if RECORDINGS_PATH.exists():
-        for user_dir in RECORDINGS_PATH.iterdir():
-            if not user_dir.is_dir():
-                continue
-            discord_id = user_dir.name
-            if not discord_id.isdigit():
-                continue  # skip anything that's not a pure numeric ID folder
-
-            # Register processed VAD chunks
-            chunks_root = user_dir / "chunks"
-            if chunks_root.exists():
-                for date_dir in chunks_root.iterdir():
-                    if date_dir.is_dir():
-                        for wav in date_dir.glob("chunk_*.wav"):
-                            register_chunk(discord_id, date_dir.name, wav.name, str(wav))
-
-    # Start background thread that keeps the DB in sync with new VAD chunks
+    # Chunk registration runs in the background thread (immediate first pass), so
+    # the server accepts connections right away even with a huge, network-mounted
+    # recordings volume — instead of blocking startup on a full disk scan.
     t = threading.Thread(target=_scan_and_register_all_chunks, daemon=True)
     t.start()
-    logger.info(f"Background chunk scanner started (every {CHUNK_SCAN_INTERVAL}s)")
+    logger.info(f"Background chunk scanner started (immediate first pass, then every {CHUNK_SCAN_INTERVAL}s)")
 
 
 def get_current_user(request: Request):
