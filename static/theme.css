@@ -60,6 +60,20 @@ main { max-width: 760px; margin: 0 auto; padding: 40px 24px 80px; animation: fad
 .badge.pending  { color: var(--gold); border-color: rgba(245,158,11,0.3); background: var(--gold-subtle); }
 .badge.issue    { color: var(--gold); border-color: rgba(245,158,11,0.3); background: var(--gold-subtle); }
 
+/* Start gate (validate / submissions don't load until pressed) */
+.start-card {
+    text-align: center; padding: 56px 24px;
+    background: var(--surface); border: 1px solid var(--border); border-radius: 18px;
+}
+.start-btn {
+    font-family: 'Syne', sans-serif; font-weight: 700; font-size: 16px; cursor: pointer;
+    padding: 15px 32px; border-radius: 14px;
+    border: 1px solid var(--accent); background: var(--accent-subtle); color: var(--text);
+    transition: all 0.2s;
+}
+.start-btn:hover { background: var(--accent); box-shadow: 0 8px 30px var(--accent-glow); }
+.start-hint { color: var(--muted); font-size: 12px; margin-top: 14px; }
+
 /* Empty / done states */
 .state-card {
     text-align: center; padding: 48px 24px;

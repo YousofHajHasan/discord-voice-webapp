@@ -73,14 +73,21 @@
 
 <main>
     <h1 class="page-title">My Submissions</h1>
-    <p class="page-subtitle">Everything you've accepted or rejected. Tap one to edit and re-decide.</p>
+    <p class="page-subtitle">Everything you've accepted, flagged, or rejected. Tap one to edit and re-decide.</p>
 
-    <div class="sub-filters">
-        <div class="sub-pills" id="status-filter"></div>
-        <select class="sub-select" id="rec-date" title="Filter by date recorded"></select>
-        <select class="sub-select" id="rev-date" title="Filter by date reviewed"></select>
+    <div id="start" class="start-card">
+        <button id="start-btn" class="start-btn">▶ Load my submissions</button>
+        <p class="start-hint">Fetches your decided chunks on demand.</p>
     </div>
-    <div id="list"></div>
+
+    <div id="content" style="display:none">
+        <div class="sub-filters">
+            <div class="sub-pills" id="status-filter"></div>
+            <select class="sub-select" id="rec-date" title="Filter by date recorded"></select>
+            <select class="sub-select" id="rev-date" title="Filter by date reviewed"></select>
+        </div>
+        <div id="list"></div>
+    </div>
 </main>
 
 <div class="modal" id="modal">

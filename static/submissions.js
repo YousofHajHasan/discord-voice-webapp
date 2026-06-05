@@ -173,4 +173,11 @@ function escapeHtml(s) {
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
 
-load();
+// ── Start gate: nothing loads until the user presses the button ─────────────
+const startEl = document.getElementById('start');
+const contentEl = document.getElementById('content');
+document.getElementById('start-btn').addEventListener('click', async () => {
+  startEl.style.display = 'none';
+  contentEl.style.display = '';
+  await load();
+});

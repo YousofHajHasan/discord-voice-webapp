@@ -76,10 +76,23 @@ async def submissions_page(request: Request):
 
 # ── JSON API ──────────────────────────────────────────────────────────────────
 
-@router.get("/validate/api/state")
-async def api_state(request: Request):
+@router.get("/validate/api/queue")
+async def api_queue(
+    request: Request,
+    limit: int = 10,
+    after_owner: str = "",
+    after_date: str = "",
+    after_filename: str = "",
+):
+    """
+    A bounded, cursor-paged window of pending chunks (default 10) + total pending.
+    Pass after_owner/after_date/after_filename (the last chunk you hold) to get
+    the next page.
+    """
     user = _require_user(request)
-    return {"viewer_id": user["id"], "items": vdb.get_validation_state(user["id"])}
+    after = (after_owner, after_date, after_filename) if (after_owner and after_date and after_filename) else None
+    items, total = vdb.get_pending_window(user["id"], limit, after)
+    return {"viewer_id": user["id"], "items": items, "pending_total": total}
 
 
 @router.get("/validate/api/submissions")

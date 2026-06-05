@@ -88,8 +88,8 @@ def main():
     import validate
 
     dev_user = {"id": DEV_USER_ID, "username": DEV_USERNAME, "avatar": DEV_AVATAR}
-    app_main.get_current_user = lambda request: dev_user   # bypass Discord login
-    validate.get_current_user = lambda request: dev_user
+    app_main.get_current_user = lambda *_: dev_user   # bypass Discord login (ignores request)
+    validate.get_current_user = lambda *_: dev_user
 
     print("\n" + "=" * 60)
     print("  LOCAL DEV MODE — Discord login bypassed")

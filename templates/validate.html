@@ -38,15 +38,22 @@
 
 <main>
     <h1 class="page-title">Validate</h1>
-    <p class="page-subtitle">Listen, fix the transcription, then Accept or Delete — one chunk at a time.</p>
+    <p class="page-subtitle">Listen, fix the transcription, then Accept / Issue / Reject — one chunk at a time.</p>
 
-    <div id="progress" class="vp-progress"></div>
-    <div id="banner"></div>
-    <div id="editor-host"></div>
-    <div id="nav" class="vp-nav">
-        <button id="back" class="vp-navbtn">← Back</button>
-        <span id="counter" class="vp-counter"></span>
-        <button id="fwd" class="vp-navbtn">Forward →</button>
+    <div id="start" class="start-card">
+        <button id="start-btn" class="start-btn">▶ Start validating</button>
+        <p class="start-hint">Loads 10 chunks at a time as you go.</p>
+    </div>
+
+    <div id="content" style="display:none">
+        <div id="progress" class="vp-progress"></div>
+        <div id="banner"></div>
+        <div id="editor-host"></div>
+        <div id="nav" class="vp-nav">
+            <button id="back" class="vp-navbtn">← Back</button>
+            <span id="counter" class="vp-counter"></span>
+            <button id="fwd" class="vp-navbtn">Forward →</button>
+        </div>
     </div>
 </main>
 
