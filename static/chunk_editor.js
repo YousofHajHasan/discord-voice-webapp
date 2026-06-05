@@ -138,9 +138,12 @@
       this.dateEl.textContent = chunk.date;
       this._setStatus(chunk.status);
 
-      const text = chunk.verified_transcription != null && chunk.verified_transcription !== ''
-        ? chunk.verified_transcription
-        : (chunk.transcription || '');
+      // Pending (never decided) -> prefill the ASR default as a helpful start.
+      // Decided (verified/issue/rejected) -> show exactly what was saved, even
+      // if empty. Accepting/saving an empty box intentionally clears the text
+      // and must NOT fall back to the default ASR value.
+      const decided = chunk.status && chunk.status !== 'pending';
+      const text = decided ? (chunk.verified_transcription || '') : (chunk.transcription || '');
       this.textEl.value = text;
       this._applyDir();
 

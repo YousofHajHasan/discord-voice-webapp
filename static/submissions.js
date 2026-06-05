@@ -121,7 +121,9 @@ function render() {
 }
 
 function rowHtml(it) {
-  const text = (it.verified_transcription || it.transcription || '');
+  // Submissions rows are always decided -> show the saved verified text as-is
+  // (empty stays empty; never fall back to the ASR default).
+  const text = it.verified_transcription || '';
   const snippet = text ? escapeHtml(text.slice(0, 90)) : '<span class="sub-empty">— no transcription —</span>';
   const key = `${it.owner_id}|${it.date}|${it.filename}`;
   const mark = it.status === 'verified' ? '✓' : it.status === 'issue' ? '⚠' : '✕';
