@@ -59,6 +59,11 @@
         </div>
         <div class="ce-text-label">Transcription</div>
         <textarea class="ce-text" placeholder="Type what is said in this clip…"></textarea>
+        <div class="ce-asr" style="display:none">
+          <span class="ce-asr-label">ASR</span>
+          <span class="ce-asr-text" dir="auto"></span>
+          <button type="button" class="ce-asr-use" title="Copy this suggestion into the box">use</button>
+        </div>
         <div class="ce-actions">
           <button class="ce-btn ce-reject"></button>
           <button class="ce-btn ce-issue"></button>
@@ -73,6 +78,9 @@
       this.canvas   = this.el.querySelector('.ce-wave');
       this.timeEl   = this.el.querySelector('.ce-time');
       this.textEl   = this.el.querySelector('.ce-text');
+      this.asrEl     = this.el.querySelector('.ce-asr');
+      this.asrTextEl = this.el.querySelector('.ce-asr-text');
+      this.asrUseBtn = this.el.querySelector('.ce-asr-use');
       this.acceptBtn = this.el.querySelector('.ce-accept');
       this.rejectBtn = this.el.querySelector('.ce-reject');
       this.issueBtn  = this.el.querySelector('.ce-issue');
@@ -85,6 +93,11 @@
       this.playBtn.addEventListener('click', () => this.togglePlay());
       this.canvas.addEventListener('click', (e) => this._seek(e));
       this.textEl.addEventListener('input', () => this._applyDir());
+      this.asrUseBtn.addEventListener('click', () => {
+        this.textEl.value = this.asrTextEl.textContent;
+        this._applyDir();
+        this.textEl.focus();
+      });
 
       this.acceptBtn.addEventListener('click', async () => {
         this._busy(true);
@@ -146,6 +159,16 @@
       const text = decided ? (chunk.verified_transcription || '') : (chunk.transcription || '');
       this.textEl.value = text;
       this._applyDir();
+
+      // Greyed ASR reference: on a decided chunk the box shows your saved value,
+      // so surface the original machine guess underneath (with a "use" button).
+      const asr = (chunk.transcription || '').trim();
+      if (decided && asr) {
+        this.asrTextEl.textContent = asr;
+        this.asrEl.style.display = 'flex';
+      } else {
+        this.asrEl.style.display = 'none';
+      }
 
       // reset playback + waveform
       this._stop();
