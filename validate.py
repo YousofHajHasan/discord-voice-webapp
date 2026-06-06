@@ -77,28 +77,88 @@ async def submissions_page(request: Request):
 # ── JSON API ──────────────────────────────────────────────────────────────────
 
 @router.get("/validate/api/queue")
-async def api_queue(
-    request: Request,
-    limit: int = 10,
-    after_owner: str = "",
-    after_date: str = "",
-    after_filename: str = "",
-):
+async def api_queue(request: Request, limit: int = 10, owner: str = ""):
     """
-    A bounded, cursor-paged window of pending chunks (default 10) + total pending.
-    Pass after_owner/after_date/after_filename (the last chunk you hold) to get
-    the next page.
+    Lease + return the next window of pending chunks (default 10) for ONE owner,
+    plus that owner's total pending. `owner` defaults to the viewer themselves;
+    pass another id (from /owners) to validate someone who granted you access.
+
+    Each call leases its chunks to the caller, so two validators on the same
+    owner get DIFFERENT chunks (see vdb.claim_pending_window). Just call it again
+    to get the next batch — chunks you already hold aren't re-sent.
     """
     user = _require_user(request)
-    after = (after_owner, after_date, after_filename) if (after_owner and after_date and after_filename) else None
-    items, total = vdb.get_pending_window(user["id"], limit, after)
-    return {"viewer_id": user["id"], "items": items, "pending_total": total}
+    owner_id = owner or user["id"]
+    _safe(owner_id)
+    items, total = vdb.claim_pending_window(user["id"], owner_id, limit)
+    return {"viewer_id": user["id"], "owner_id": owner_id, "items": items, "pending_total": total}
+
+
+@router.get("/validate/api/owners")
+async def api_owners(request: Request):
+    """Owners the viewer may validate (themselves + anyone who granted them) — for the dropdown."""
+    user = _require_user(request)
+    return {"viewer_id": user["id"], "owners": vdb.get_accessible_owners(user["id"])}
+
+
+@router.get("/validate/api/delegates")
+async def api_delegates(request: Request):
+    """People the viewer has granted validate-access to — for the manage panel."""
+    user = _require_user(request)
+    return {"delegates": vdb.get_delegates(user["id"])}
+
+
+@router.post("/validate/api/grant")
+async def api_grant(request: Request):
+    user = _require_user(request)
+    body = await request.json()
+    delegate_id = str(body.get("delegate_id", "")).strip()
+    if not vdb.grant_access(user["id"], delegate_id):
+        raise HTTPException(status_code=400, detail="Enter a valid Discord user ID (numbers only, not yourself).")
+    return {"ok": True, "delegates": vdb.get_delegates(user["id"])}
+
+
+@router.post("/validate/api/revoke")
+async def api_revoke(request: Request):
+    user = _require_user(request)
+    body = await request.json()
+    delegate_id = str(body.get("delegate_id", "")).strip()
+    vdb.revoke_access(user["id"], delegate_id)
+    return {"ok": True, "delegates": vdb.get_delegates(user["id"])}
+
+
+@router.post("/validate/api/release")
+async def api_release(request: Request):
+    """
+    Free the viewer's un-decided leases (on owner-switch / page leave) so chunks
+    return to the pool immediately instead of waiting out the 15-min lease.
+    Tolerant of an empty/garbage body since it's also called via sendBeacon.
+    """
+    user = _require_user(request)
+    owner = ""
+    try:
+        body = await request.json()
+        owner = str(body.get("owner", "")).strip()
+    except Exception:
+        pass
+    vdb.release_my_claims(user["id"], owner or None)
+    return {"ok": True}
 
 
 @router.get("/validate/api/submissions")
 async def api_submissions(request: Request):
     user = _require_user(request)
     return {"viewer_id": user["id"], "items": vdb.get_submissions(user["id"])}
+
+
+def _decide_response(result: str, ok_status: str):
+    """Map a vdb decision result -> HTTP response. 409 lets the client skip a
+    chunk another validator already decided, without an error popup."""
+    if result == "ok":
+        return JSONResponse({"ok": True, "status": ok_status})
+    if result == "conflict":
+        raise HTTPException(status_code=409, detail="This chunk was already validated by someone else.")
+    raise HTTPException(status_code=404, detail="Chunk not found or access denied")
 
 
 @router.post("/validate/api/accept")
@@ -110,9 +170,7 @@ async def api_accept(request: Request):
     filename = str(body.get("filename", ""))
     _safe(owner_id, date, filename)
     text = (body.get("transcription") or "").strip()
-    if not vdb.accept_chunk(user["id"], owner_id, date, filename, text):
-        raise HTTPException(status_code=404, detail="Chunk not found or access denied")
-    return JSONResponse({"ok": True, "status": "verified"})
+    return _decide_response(vdb.accept_chunk(user["id"], owner_id, date, filename, text), "verified")
 
 
 @router.post("/validate/api/reject")
@@ -123,9 +181,7 @@ async def api_reject(request: Request):
     date = str(body.get("date", ""))
     filename = str(body.get("filename", ""))
     _safe(owner_id, date, filename)
-    if not vdb.reject_chunk(user["id"], owner_id, date, filename):
-        raise HTTPException(status_code=404, detail="Chunk not found or access denied")
-    return JSONResponse({"ok": True, "status": "rejected"})
+    return _decide_response(vdb.reject_chunk(user["id"], owner_id, date, filename), "rejected")
 
 
 @router.post("/validate/api/issue")
@@ -137,9 +193,7 @@ async def api_issue(request: Request):
     filename = str(body.get("filename", ""))
     _safe(owner_id, date, filename)
     text = (body.get("transcription") or "").strip()
-    if not vdb.issue_chunk(user["id"], owner_id, date, filename, text):
-        raise HTTPException(status_code=404, detail="Chunk not found or access denied")
-    return JSONResponse({"ok": True, "status": "issue"})
+    return _decide_response(vdb.issue_chunk(user["id"], owner_id, date, filename, text), "issue")
 
 
 # ── Grant-aware audio stream ──────────────────────────────────────────────────

@@ -14,6 +14,7 @@ from database import (
     init_db, upsert_user, log_audio_file,
     bulk_register_chunks, get_chunks_for_user, delete_chunk,
     get_pending_chunks, claim_chunks, set_transcription, release_stale_claims,
+    release_stale_validation_claims,
 )
 from validate import router as validate_router
 
@@ -95,6 +96,9 @@ def _scan_and_register_all_chunks():
             freed = release_stale_claims()
             if freed:
                 logger.info(f"Background: released {freed} stale chunk claim(s)")
+            freed_val = release_stale_validation_claims()
+            if freed_val:
+                logger.info(f"Background: released {freed_val} stale validation lease(s)")
         except Exception as e:
             logger.error(f"Background chunk scan error: {e}")
 

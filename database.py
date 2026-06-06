@@ -1,10 +1,26 @@
 import os
 from datetime import datetime, timedelta, timezone
-from sqlalchemy import create_engine, Column, String, Boolean, DateTime, Text, ForeignKey, UniqueConstraint, Float, inspect, text
+from sqlalchemy import create_engine, Column, String, Boolean, DateTime, Text, ForeignKey, UniqueConstraint, Float, inspect, text, event
 from sqlalchemy.orm import declarative_base, sessionmaker
 
 DB_PATH = os.environ.get("DB_PATH", "/app/db/recordings.db")
 engine = create_engine(f"sqlite:///{DB_PATH}", connect_args={"check_same_thread": False})
+
+
+@event.listens_for(engine, "connect")
+def _sqlite_pragmas(dbapi_conn, _record):
+    """
+    Wait up to 5s for SQLite's single write lock instead of immediately raising
+    "database is locked". The validator claim (claim_pending_window) is a
+    conditional UPDATE; with multiple validators (or uvicorn workers) two claims
+    may contend for the write lock, and this lets the second one briefly wait for
+    the first to commit rather than error out.
+    """
+    cur = dbapi_conn.cursor()
+    cur.execute("PRAGMA busy_timeout=5000")
+    cur.close()
+
+
 SessionLocal = sessionmaker(bind=engine)
 Base = declarative_base()
 
@@ -61,6 +77,16 @@ class Chunk(Base):
     validated_at = Column(DateTime, nullable=True, default=None)
     validated_by = Column(String, nullable=True, default=None)  # discord_id who acted
 
+    # Human-validation work-queue lease. SEPARATE from claimed_by/claimed_at above
+    # (which the ASR transcription script uses) so the script and human validators
+    # never contend for the same lock. A validator leases a window of pending
+    # chunks when they fetch; the lease auto-expires after VALIDATION_LEASE_MINUTES
+    # so chunks fetched-but-never-decided return to the shared pool. This is what
+    # keeps two validators on the SAME owner from grabbing the same chunks — see
+    # validation_db.claim_pending_window().
+    validation_claimed_by = Column(String, nullable=True, default=None)   # discord_id leasing it
+    validation_claimed_at = Column(DateTime, nullable=True, default=None)  # when, for lease expiry
+
 
 class AccessGrant(Base):
     """
@@ -86,6 +112,8 @@ _CHUNK_COLUMN_MIGRATIONS = {
     "verified_transcription": "TEXT",
     "validated_at":           "DATETIME",
     "validated_by":           "VARCHAR",
+    "validation_claimed_by":  "VARCHAR",
+    "validation_claimed_at":  "DATETIME",
 }
 
 
@@ -312,6 +340,38 @@ def release_stale_claims():
         if count:
             db.commit()
     return count
+
+
+# ── Human-validation leases ───────────────────────────────────────────────────
+
+VALIDATION_LEASE_MINUTES = 15
+
+
+def release_stale_validation_claims() -> int:
+    """
+    Free validator leases (validation_claimed_by/at) older than
+    VALIDATION_LEASE_MINUTES that are still pending — so chunks a validator
+    fetched but never decided (closed the tab, crashed, walked away) return to
+    the shared pool for other validators. Mirrors release_stale_claims() for the
+    ASR queue. Called from the background scan thread.
+    """
+    cutoff = datetime.now(timezone.utc) - timedelta(minutes=VALIDATION_LEASE_MINUTES)
+    with SessionLocal() as db:
+        n = (
+            db.query(Chunk)
+            .filter(
+                Chunk.validation_claimed_by != None,
+                Chunk.validation_claimed_at < cutoff,
+                Chunk.validation_status == "pending",
+            )
+            .update(
+                {Chunk.validation_claimed_by: None, Chunk.validation_claimed_at: None},
+                synchronize_session=False,
+            )
+        )
+        if n:
+            db.commit()
+    return n
 
 
 def claim_chunks(machine_id: str, batch_size: int = 20) -> list:

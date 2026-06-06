@@ -22,6 +22,61 @@
         .vp-navbtn:hover:not(:disabled) { border-color: var(--border-hover); }
         .vp-navbtn:disabled { opacity: 0.35; cursor: default; }
         .vp-counter { font-size: 12px; color: var(--muted); }
+
+        /* Owner picker + access management */
+        .vp-controls { margin-bottom: 20px; }
+        .owner-row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+        .owner-label { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 1.2px; }
+        .owner-select {
+            background: var(--surface); color: var(--text); border: 1px solid var(--border);
+            border-radius: 10px; padding: 9px 12px; font-family: 'DM Mono', monospace; font-size: 13px;
+            cursor: pointer; min-width: 230px; max-width: 100%;
+        }
+        .owner-select:focus { outline: none; border-color: var(--accent); }
+        .ghost-btn {
+            margin-left: auto; background: none; color: var(--muted); border: 1px solid var(--border);
+            border-radius: 10px; padding: 9px 14px; font-family: 'DM Mono', monospace; font-size: 12px;
+            cursor: pointer; transition: all 0.15s;
+        }
+        .ghost-btn:hover { color: var(--text); border-color: var(--border-hover); }
+        .ghost-btn.active { color: var(--accent); border-color: var(--accent); }
+
+        .manage-panel {
+            margin-top: 14px; padding: 18px; background: var(--surface);
+            border: 1px solid var(--border); border-radius: 14px;
+        }
+        .manage-title { font-size: 11px; color: var(--muted); margin: 0 0 12px; text-transform: uppercase; letter-spacing: 1.2px; }
+        .manage-row { display: flex; gap: 10px; }
+        .manage-input {
+            flex: 1; min-width: 0; background: var(--surface-2); color: var(--text);
+            border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px;
+            font-family: 'DM Mono', monospace; font-size: 13px;
+        }
+        .manage-input:focus { outline: none; border-color: var(--accent); }
+        .manage-btn {
+            flex-shrink: 0; background: var(--green-subtle); color: var(--green);
+            border: 1px solid rgba(34,197,94,0.3); border-radius: 10px; padding: 10px 16px;
+            font-family: 'Syne', sans-serif; font-weight: 700; font-size: 13px; cursor: pointer; transition: all 0.15s;
+        }
+        .manage-btn:hover { background: var(--green); color: #fff; border-color: var(--green); }
+        .manage-msg { font-size: 12px; margin: 10px 2px 0; min-height: 16px; }
+        .manage-msg.ok { color: var(--green); }
+        .manage-msg.err { color: var(--red); }
+
+        .delegate-list { list-style: none; padding: 0; margin: 14px 0 0; display: flex; flex-direction: column; gap: 8px; }
+        .delegate-item {
+            display: flex; align-items: center; justify-content: space-between; gap: 12px;
+            background: var(--surface-2); border: 1px solid var(--border); border-radius: 10px; padding: 9px 13px;
+        }
+        .delegate-name { font-size: 13px; color: var(--text); }
+        .delegate-id { font-size: 11px; color: var(--muted); margin-left: 8px; }
+        .delegate-revoke {
+            flex-shrink: 0; background: var(--red-subtle); color: var(--red);
+            border: 1px solid rgba(239,68,68,0.3); border-radius: 8px; padding: 5px 12px;
+            font-family: 'DM Mono', monospace; font-size: 12px; cursor: pointer; transition: all 0.15s;
+        }
+        .delegate-revoke:hover { background: var(--red); color: #fff; border-color: var(--red); }
+        .delegate-empty { font-size: 12px; color: var(--muted); padding: 4px 2px; }
     </style>
 </head>
 <body>
@@ -39,6 +94,24 @@
 <main>
     <h1 class="page-title">Validate</h1>
     <p class="page-subtitle">Listen, fix the transcription, then Accept / Issue / Reject — one chunk at a time.</p>
+
+    <div class="vp-controls">
+        <div class="owner-row">
+            <label for="owner-select" class="owner-label">Validating</label>
+            <select id="owner-select" class="owner-select"></select>
+            <button id="manage-toggle" type="button" class="ghost-btn">Manage access</button>
+        </div>
+        <div id="manage" class="manage-panel" style="display:none">
+            <p class="manage-title">People who can validate your voices</p>
+            <div class="manage-row">
+                <input id="grant-id" class="manage-input" inputmode="numeric" autocomplete="off"
+                       placeholder="Discord user ID to grant access…">
+                <button id="grant-btn" type="button" class="manage-btn">Grant access</button>
+            </div>
+            <div id="grant-msg" class="manage-msg"></div>
+            <ul id="delegates" class="delegate-list"></ul>
+        </div>
+    </div>
 
     <div id="start" class="start-card">
         <button id="start-btn" class="start-btn">▶ Start validating</button>
