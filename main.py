@@ -14,7 +14,7 @@ from database import (
     init_db, upsert_user, log_audio_file,
     bulk_register_chunks, get_chunks_for_user, delete_chunk,
     get_pending_chunks, claim_chunks, set_transcription, release_stale_claims,
-    release_stale_validation_claims,
+    release_stale_validation_claims, backfill_durations,
 )
 from validate import router as validate_router
 
@@ -99,6 +99,11 @@ def _scan_and_register_all_chunks():
             freed_val = release_stale_validation_claims()
             if freed_val:
                 logger.info(f"Background: released {freed_val} stale validation lease(s)")
+            # Lazily measure audio durations for the Insights totals — capped
+            # per cycle so the big initial backlog never blocks anything.
+            measured = backfill_durations()
+            if measured:
+                logger.info(f"Background: measured duration for {measured} chunk(s)")
         except Exception as e:
             logger.error(f"Background chunk scan error: {e}")
 

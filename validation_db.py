@@ -16,11 +16,15 @@ Status model (Chunk.validation_status):
 """
 from datetime import datetime, timezone, timedelta
 
-from sqlalchemy import or_, update, select, func
+from sqlalchemy import or_, update, select, func, case
 from database import (
     SessionLocal, Chunk, AccessGrant, User, _resolve_filepath,
-    VALIDATION_LEASE_MINUTES,
+    measure_chunk_duration, VALIDATION_LEASE_MINUTES,
 )
+
+# Statuses that count as "still to validate" for the Insights remaining total.
+# issue is included on purpose (flagged-but-not-finished work — see get_insights).
+REMAINING_STATUSES = ["pending", "issue"]
 
 
 # ── Access grants (delegated validation) ──────────────────────────────────────
@@ -280,6 +284,67 @@ def get_submissions(viewer_id: str) -> list:
         return [_serialize(r) for r in rows if _resolve_filepath(r) is not None]
 
 
+# ── Insights ──────────────────────────────────────────────────────────────────
+
+def get_insights(owner_id: str) -> dict:
+    """
+    Per-owner validation insights for the submissions-page popup, scoped to a
+    SINGLE owner (the viewer's own voices by default, or a user who granted the
+    viewer access — the caller checks that access). All durations in SECONDS
+    (the frontend formats minutes/hours):
+
+      verified_count / verified_seconds
+          That owner's chunks accepted by ANY validator (status 'verified') —
+          i.e. dataset completion for this person's voices, not "who did it".
+
+      remaining_count / remaining_seconds
+          That owner's chunks still to do (status pending OR issue). Duration is
+          the SUM of already-measured rows.
+
+      remaining_unmeasured
+          How many of those remaining chunks have no duration yet (backfill in
+          progress). When > 0 the UI labels the time as "measuring…" since it's
+          still climbing. 0 means the totals are exact.
+
+    Computed entirely with the (discord_id, validation_status) index — no
+    per-request file reads.
+    """
+    with SessionLocal() as db:
+        v_count, v_secs = (
+            db.query(
+                func.count(Chunk.id),
+                func.coalesce(func.sum(Chunk.duration), 0.0),
+            )
+            .filter(
+                Chunk.discord_id == owner_id,
+                Chunk.validation_status == "verified",
+                Chunk.is_deleted == False,
+            )
+            .one()
+        )
+        r_count, r_secs, r_unmeasured = (
+            db.query(
+                func.count(Chunk.id),
+                func.coalesce(func.sum(func.coalesce(Chunk.duration, 0.0)), 0.0),
+                func.coalesce(func.sum(case((Chunk.duration.is_(None), 1), else_=0)), 0),
+            )
+            .filter(
+                Chunk.discord_id == owner_id,
+                Chunk.is_deleted == False,
+                Chunk.validation_status.in_(REMAINING_STATUSES),
+            )
+            .one()
+        )
+    return {
+        "owner_id": owner_id,
+        "verified_count": int(v_count or 0),
+        "verified_seconds": float(v_secs or 0.0),
+        "remaining_count": int(r_count or 0),
+        "remaining_seconds": float(r_secs or 0.0),
+        "remaining_unmeasured": int(r_unmeasured or 0),
+    }
+
+
 # ── Mutations ─────────────────────────────────────────────────────────────────
 
 def _decide(viewer_id: str, owner_id: str, date: str, filename: str,
@@ -298,6 +363,10 @@ def _decide(viewer_id: str, owner_id: str, date: str, filename: str,
     if not can_access(viewer_id, owner_id):
         return "denied"
     chunk_id = f"{owner_id}:{date}:{filename}"
+    # Measure the duration BEFORE opening the write txn (header read off the DB
+    # lock) so the Insights "verified" totals are exact without waiting on the
+    # backfill, and without holding SQLite's write lock during file I/O.
+    measured = measure_chunk_duration(owner_id, date, filename)
     with SessionLocal() as db:
         row = db.get(Chunk, chunk_id)
         if not row or row.is_deleted:
@@ -310,6 +379,8 @@ def _decide(viewer_id: str, owner_id: str, date: str, filename: str,
             return "conflict"
         if text is not None:
             row.verified_transcription = text
+        if row.duration is None and measured is not None:
+            row.duration = measured
         row.validation_status = new_status
         row.validated_at = datetime.now(timezone.utc)
         row.validated_by = viewer_id

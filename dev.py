@@ -112,6 +112,70 @@ def seed_users_and_grants():
     vdb.grant_access(DEV_USER_ID, TEAMMATE_ID)
 
 
+def seed_decisions():
+    """
+    Pre-decide a few chunks so the Submissions page and the Insights popup show
+    real numbers on first load — verified count / minutes / hours plus a non-zero
+    "remaining" — without having to hand-validate first. Idempotent: only runs
+    when the dev user has made no decisions yet, so re-running dev.py won't keep
+    piling on decisions.
+
+    Chunks must exist in the DB before they can be decided, so we register the
+    just-seeded wavs here (the startup scanner does this too, but it hasn't run
+    yet at seed time). Durations are then measured up front so the popup's
+    minutes/hours are populated immediately instead of trickling in.
+    """
+    import main as app_main
+    import validation_db as vdb
+    from database import bulk_register_chunks, backfill_durations, SessionLocal, Chunk
+
+    bulk_register_chunks(app_main._scan_disk_for_chunks())
+
+    # Measure durations up front (always — even on a pre-existing dev.db whose
+    # chunks predate the duration column) so the Insights minutes/hours are
+    # populated on first open instead of trickling in via the background scanner.
+    def _measure_all():
+        while backfill_durations():
+            pass
+
+    with SessionLocal() as db:
+        if db.query(Chunk).filter(Chunk.validated_by == DEV_USER_ID).first():
+            _measure_all()
+            return  # the dev user already has decisions — leave them as-is
+
+    def _pending(owner, n):
+        with SessionLocal() as db:
+            rows = (
+                db.query(Chunk)
+                .filter(Chunk.discord_id == owner,
+                        Chunk.validation_status == "pending",
+                        Chunk.is_deleted == False)
+                .order_by(Chunk.date.asc(), Chunk.filename.asc())
+                .limit(n)
+                .all()
+            )
+            return [(r.discord_id, r.date, r.filename) for r in rows]
+
+    # A handful of the dev user's OWN chunks: mostly accepted, one flagged, one
+    # rejected — gives the Submissions filters and the verified totals something
+    # to show. accept/issue self-populate each chunk's duration on decide.
+    own = _pending(DEV_USER_ID, 6)
+    for c in own[:4]:
+        vdb.accept_chunk(DEV_USER_ID, *c, "seeded verified transcription")
+    if len(own) > 4:
+        vdb.issue_chunk(DEV_USER_ID, *own[4], "needs trimming")
+    if len(own) > 5:
+        vdb.reject_chunk(DEV_USER_ID, *own[5])
+
+    # …plus a couple of alice's chunks (she granted the dev user access) so the
+    # Insights "verified" and "remaining" totals reflect delegated owners too.
+    for c in _pending(ALICE_ID, 2):
+        vdb.accept_chunk(DEV_USER_ID, *c, "seeded verified (delegated)")
+
+    _measure_all()  # remaining minutes/hours non-zero on first open
+    print("[dev] seeded sample decisions (accepted/issue/rejected) for the insights + submissions demo")
+
+
 def _setup_app():
     """Wire the dev bypass + seed data, return the FastAPI app (no server start)."""
     # Safety: never let the login-bypass run against the production volumes.
@@ -134,6 +198,7 @@ def _setup_app():
     # calls it again harmlessly).
     init_db()
     seed_users_and_grants()
+    seed_decisions()
 
     default_user = {"id": DEV_USER_ID, "username": DEV_USERNAME, "avatar": DEV_AVATAR}
 
@@ -182,6 +247,8 @@ def main():
     print("  ── Try: as localdev validate 'My own voices'; as teammate validate")
     print("     'localdev' — same owner, chunks split 10-at-a-time, no overlap.")
     print("     As localdev the dropdown also shows 'alice' (she granted you access).")
+    print(f"  ── Insights: {base}/validate/submissions  →  '📊 Insights' button")
+    print("     (sample decisions are pre-seeded so verified + remaining show real numbers).")
     print("=" * 66 + "\n")
 
     import uvicorn

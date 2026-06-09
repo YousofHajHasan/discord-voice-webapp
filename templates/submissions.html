@@ -57,6 +57,82 @@
             cursor: pointer; font-size: 15px;
         }
         .modal-close:hover { border-color: var(--border-hover); }
+
+        /* Insights button */
+        .title-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; flex-wrap: wrap; }
+        .insights-btn {
+            flex-shrink: 0; display: inline-flex; align-items: center; gap: 9px;
+            font-family: 'DM Mono', monospace; font-size: 13px; cursor: pointer;
+            background: var(--surface); color: var(--text); border: 1px solid var(--border);
+            border-radius: 11px; padding: 10px 16px; transition: all 0.18s; white-space: nowrap;
+        }
+        .insights-btn:hover { border-color: var(--accent); background: var(--accent-subtle); box-shadow: 0 6px 24px var(--accent-glow); }
+        .insights-btn svg { display: block; }
+        .insights-btn .bar { fill: var(--accent); }
+
+        /* Slide-in drawer (anchored to the right edge, never centered) */
+        .drawer-backdrop {
+            position: fixed; inset: 0; z-index: 200; background: rgba(0,0,0,0.5);
+            backdrop-filter: blur(2px); opacity: 0; pointer-events: none; transition: opacity 0.25s;
+        }
+        .drawer-backdrop.open { opacity: 1; pointer-events: auto; }
+        .drawer {
+            position: fixed; top: 0; right: 0; z-index: 201; height: 100vh; width: 400px; max-width: 90vw;
+            background: var(--surface); border-left: 1px solid var(--border);
+            box-shadow: -24px 0 70px rgba(0,0,0,0.55);
+            transform: translateX(100%); transition: transform 0.30s cubic-bezier(0.16,1,0.3,1);
+            display: flex; flex-direction: column; padding: 26px 24px; overflow-y: auto;
+        }
+        .drawer.open { transform: translateX(0); }
+        .drawer-head { display: flex; align-items: flex-start; justify-content: space-between; margin-bottom: 8px; }
+        .drawer-title { font-family: 'Syne', sans-serif; font-size: 23px; font-weight: 800; }
+        .drawer-sub { font-size: 12px; color: var(--muted); margin-top: 3px; }
+        .drawer-close {
+            width: 34px; height: 34px; border-radius: 10px; flex-shrink: 0;
+            border: 1px solid var(--border); background: var(--surface-2); color: var(--text);
+            cursor: pointer; font-size: 14px; transition: all 0.15s;
+        }
+        .drawer-close:hover { border-color: var(--border-hover); }
+
+        /* Owner filter */
+        .ins-owner-row { display: flex; align-items: center; gap: 10px; margin: 14px 0 2px; }
+        .ins-owner-label { font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); flex-shrink: 0; }
+        #insights-owner { flex: 1; }
+
+        /* Completion headline + single split bar */
+        .ins-headline { display: flex; align-items: baseline; gap: 10px; margin: 26px 0 4px; }
+        .ins-pct { font-family: 'Syne', sans-serif; font-size: 46px; font-weight: 800; line-height: 1; }
+        .ins-headline .lbl { font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.12em; }
+        .ins-caption { font-size: 12.5px; color: var(--muted); margin-bottom: 18px; }
+        .ins-caption b { color: var(--text); font-weight: 500; }
+
+        .pbar { display: flex; height: 20px; border-radius: 10px; overflow: hidden;
+                background: var(--surface-2); border: 1px solid var(--border); }
+        .pbar-seg { height: 100%; width: 0; transition: width 0.7s cubic-bezier(0.16,1,0.3,1); }
+        .pbar-seg.v { background: linear-gradient(90deg, #16a34a, var(--green)); }
+        .pbar-seg.r { background: linear-gradient(90deg, var(--gold), #d97706); }
+        .pbar-legend { display: flex; gap: 20px; margin: 12px 0 24px; }
+        .pbar-legend span { display: inline-flex; align-items: center; gap: 7px; font-size: 12px; color: var(--muted); }
+
+        .ins-dot { width: 9px; height: 9px; border-radius: 50%; display: inline-block; flex-shrink: 0; }
+        .ins-dot.v { background: var(--green); }
+        .ins-dot.r { background: var(--gold); }
+
+        /* Exact-details table */
+        .ins-table { width: 100%; border-collapse: collapse; }
+        .ins-table th, .ins-table td { padding: 11px 4px; text-align: right; }
+        .ins-table th:first-child, .ins-table td:first-child { text-align: left; }
+        .ins-table thead th { font-size: 10px; text-transform: uppercase; letter-spacing: 0.07em;
+                              color: var(--muted); font-weight: 400; border-bottom: 1px solid var(--border); }
+        .ins-table tbody td { font-size: 13px; color: var(--muted); border-bottom: 1px solid var(--border); }
+        .ins-table .name { display: inline-flex; align-items: center; gap: 8px; color: var(--text); }
+        .ins-table .num { font-family: 'Syne', sans-serif; font-weight: 700; font-size: 15px; color: var(--text); }
+        .ins-table tr.total td { border-bottom: none; padding-top: 13px; }
+        .ins-table tr.total td:first-child { font-size: 11px; text-transform: uppercase; letter-spacing: 0.07em; color: var(--muted); }
+
+        .ins-pending { color: var(--gold); font-style: italic; }
+        .ins-note { font-size: 11px; color: var(--gold); margin-top: 6px; padding-top: 16px; border-top: 1px solid var(--border); }
+        .ins-loading { text-align: center; color: var(--muted); font-size: 13px; padding: 50px 0; }
     </style>
 </head>
 <body>
@@ -72,8 +148,20 @@
 </header>
 
 <main>
-    <h1 class="page-title">My Submissions</h1>
-    <p class="page-subtitle">Everything you've accepted, flagged, or rejected. Tap one to edit and re-decide.</p>
+    <div class="title-row">
+        <div>
+            <h1 class="page-title">My Submissions</h1>
+            <p class="page-subtitle">Everything you've accepted, flagged, or rejected. Tap one to edit and re-decide.</p>
+        </div>
+        <button id="insights-btn" class="insights-btn">
+            <svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true">
+                <rect class="bar" x="0"    y="6" width="3.2" height="8"  rx="1"></rect>
+                <rect class="bar" x="5.4"  y="2" width="3.2" height="12" rx="1"></rect>
+                <rect class="bar" x="10.8" y="9" width="3.2" height="5"  rx="1"></rect>
+            </svg>
+            Insights
+        </button>
+    </div>
 
     <div id="start" class="start-card">
         <button id="start-btn" class="start-btn">▶ Load my submissions</button>
@@ -96,6 +184,22 @@
         <div id="modal-editor"></div>
     </div>
 </div>
+
+<div class="drawer-backdrop" id="insights-backdrop"></div>
+<aside class="drawer" id="insights-drawer" aria-hidden="true">
+    <div class="drawer-head">
+        <div>
+            <div class="drawer-title">Insights</div>
+            <div class="drawer-sub">Your validation progress</div>
+        </div>
+        <button class="drawer-close" id="insights-close" aria-label="Close">✕</button>
+    </div>
+    <div class="ins-owner-row" id="insights-owner-row" style="display:none">
+        <label class="ins-owner-label" for="insights-owner">Showing</label>
+        <select class="sub-select" id="insights-owner"></select>
+    </div>
+    <div id="insights-body"><div class="ins-loading">Loading…</div></div>
+</aside>
 
 <script src="/recordings/static/chunk_editor.js"></script>
 <script src="/recordings/static/submissions.js"></script>

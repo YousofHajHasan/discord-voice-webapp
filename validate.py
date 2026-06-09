@@ -151,6 +151,21 @@ async def api_submissions(request: Request):
     return {"viewer_id": user["id"], "items": vdb.get_submissions(user["id"])}
 
 
+@router.get("/validate/api/insights")
+async def api_insights(request: Request, owner: str = ""):
+    """
+    Per-owner validation totals for the popup. `owner` defaults to the viewer's
+    own voices; pass another id (from /owners) to see a user who granted you
+    access. Access is enforced — you can only read owners you may validate.
+    """
+    user = _require_user(request)
+    owner_id = owner or user["id"]
+    _safe(owner_id)
+    if not vdb.can_access(user["id"], owner_id):
+        raise HTTPException(status_code=403, detail="No access to this owner")
+    return vdb.get_insights(owner_id)
+
+
 def _decide_response(result: str, ok_status: str):
     """Map a vdb decision result -> HTTP response. 409 lets the client skip a
     chunk another validator already decided, without an error popup."""

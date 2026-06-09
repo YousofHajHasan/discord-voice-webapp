@@ -1,4 +1,5 @@
 import os
+import wave
 from datetime import datetime, timedelta, timezone
 from sqlalchemy import create_engine, Column, String, Boolean, DateTime, Text, ForeignKey, UniqueConstraint, Float, inspect, text, event
 from sqlalchemy.orm import declarative_base, sessionmaker
@@ -64,6 +65,11 @@ class Chunk(Base):
     is_deleted = Column(Boolean, default=False)
     transcription = Column(Text, nullable=True, default=None)   # whisper output
     transcribed_at = Column(DateTime, nullable=True, default=None)
+    # Audio length in seconds, filled lazily (header-only read) by the background
+    # backfill and at decision time. NULL = not measured yet. Powers the
+    # validation "Insights" totals via cheap SUM() aggregates (no per-request
+    # file reads). See backfill_durations() and validation_db.get_insights().
+    duration = Column(Float, nullable=True, default=None)
     claimed_by = Column(String, nullable=True, default=None)    # machine_id holding this chunk
     claimed_at = Column(DateTime, nullable=True, default=None)  # when the claim was made
 
@@ -114,6 +120,14 @@ _CHUNK_COLUMN_MIGRATIONS = {
     "validated_by":           "VARCHAR",
     "validation_claimed_by":  "VARCHAR",
     "validation_claimed_at":  "DATETIME",
+    "duration":               "FLOAT",
+}
+
+# Indexes to (idempotently) ensure on the chunks table. The owner+status index
+# makes the Insights SUM(duration) aggregates and the per-owner pending counts
+# fast even on a multi-hundred-thousand-row table.
+_CHUNK_INDEXES = {
+    "ix_chunks_owner_status": "(discord_id, validation_status)",
 }
 
 
@@ -140,10 +154,20 @@ def _run_light_migrations():
             conn.execute(text(f"ALTER TABLE chunks ADD COLUMN {name} {ddl}"))
 
 
+def _ensure_indexes():
+    """Create any missing chunks indexes (IF NOT EXISTS — safe every startup)."""
+    if "chunks" not in inspect(engine).get_table_names():
+        return
+    with engine.begin() as conn:
+        for name, cols in _CHUNK_INDEXES.items():
+            conn.execute(text(f"CREATE INDEX IF NOT EXISTS {name} ON chunks {cols}"))
+
+
 def init_db():
     os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
     Base.metadata.create_all(engine)
     _run_light_migrations()
+    _ensure_indexes()
 
 
 def upsert_user(discord_id: str, username: str, avatar_url: str):
@@ -276,6 +300,109 @@ def _resolve_filepath(row) -> str | None:
 
     # File genuinely missing
     return None
+
+
+# ── Audio duration (header-only) + lazy backfill ──────────────────────────────
+
+DURATION_BACKFILL_BATCH = int(os.environ.get("DURATION_BACKFILL_BATCH", "500"))
+
+
+def compute_wav_duration(path: str):
+    """
+    Seconds of audio in a .wav, read from the HEADER only (no full decode) — a
+    few microseconds and a tiny read even on a network mount. Returns None if the
+    file is unreadable/corrupt so callers can decide how to record that.
+    """
+    try:
+        with wave.open(path, "rb") as w:
+            rate = w.getframerate()
+            if not rate:
+                return None
+            return w.getnframes() / float(rate)
+    except Exception:
+        return None
+
+
+def _disk_path(discord_id: str, date: str, filename: str, stored_path: str | None):
+    """
+    Existing on-disk path for a chunk, resolved WITHOUT any DB access (no filepath
+    healing, no nested session). Tries the stored path, then the canonical
+    ID-folder location. None if the file isn't found. Safe to call off the DB lock.
+    """
+    if stored_path and os.path.exists(stored_path):
+        return stored_path
+    alt = os.path.join(RECORDINGS_PATH, discord_id, "chunks", date, filename)
+    return alt if os.path.exists(alt) else None
+
+
+def measure_chunk_duration(discord_id: str, date: str, filename: str, stored_path: str | None = None):
+    """Header-only duration for a chunk, resolving its path without touching the
+    DB. None if missing/unreadable. Safe to call before opening a write txn."""
+    path = _disk_path(discord_id, date, filename, stored_path)
+    return compute_wav_duration(path) if path else None
+
+
+def backfill_durations(batch_size: int = DURATION_BACKFILL_BATCH) -> int:
+    """
+    Fill Chunk.duration for up to batch_size rows that don't have it yet, reading
+    each WAV header exactly once. Called every cycle from the background scan
+    thread until it returns 0 (backlog drained); new chunks get measured the same
+    way.
+
+    CRITICAL for the ~400k-row production backfill: the slow, network-volume
+    header reads happen with NO database transaction open. We (1) grab a batch of
+    ids in a short read and RELEASE the connection, (2) stat + measure on disk
+    holding no lock, then (3) write the results in one short transaction. This
+    mirrors claim_pending_window() and means the backfill can never block
+    validators or chunk registration on SQLite's single write lock, however slow
+    the mounted volume is.
+
+    Per row: file resolves -> store its duration; file present but corrupt ->
+    store 0.0 (never retried, so the backlog always drains); file gone -> mark
+    is_deleted (matches vanished-file handling elsewhere). Decided rows are
+    measured first so the Insights "verified" totals become exact almost
+    immediately. Returns the number of rows processed this batch.
+    """
+    # 1) Claim a batch of unmeasured chunks (short read), then drop the lock.
+    with SessionLocal() as db:
+        batch = (
+            db.query(Chunk.id, Chunk.discord_id, Chunk.date, Chunk.filename, Chunk.filepath)
+            .filter(Chunk.duration.is_(None), Chunk.is_deleted == False)
+            # False (0) sorts first -> decided rows before pending ones.
+            .order_by((Chunk.validation_status == "pending").asc())
+            .limit(batch_size)
+            .all()
+        )
+    if not batch:
+        return 0
+
+    # 2) Measure on disk with NO transaction open (header reads can be slow on a
+    #    network mount; they must not hold SQLite's lock).
+    durations = {}   # id -> seconds (0.0 if present but unreadable)
+    healed = {}      # id -> corrected filepath (found at the ID-folder location)
+    gone = []        # ids whose file is missing everywhere
+    for cid, discord_id, date, filename, stored in batch:
+        path = stored if (stored and os.path.exists(stored)) else None
+        if path is None:
+            alt = os.path.join(RECORDINGS_PATH, discord_id, "chunks", date, filename)
+            if os.path.exists(alt):
+                path, healed[cid] = alt, alt
+        if path is None:
+            gone.append(cid)
+            continue
+        dur = compute_wav_duration(path)
+        durations[cid] = dur if dur is not None else 0.0
+
+    # 3) Persist everything in one short write transaction.
+    with SessionLocal() as db:
+        if durations:
+            db.bulk_update_mappings(Chunk, [{"id": cid, "duration": d} for cid, d in durations.items()])
+        for cid, path in healed.items():
+            db.query(Chunk).filter(Chunk.id == cid).update({Chunk.filepath: path}, synchronize_session=False)
+        if gone:
+            db.query(Chunk).filter(Chunk.id.in_(gone)).update({Chunk.is_deleted: True}, synchronize_session=False)
+        db.commit()
+    return len(batch)
 
 
 def get_chunks_for_user(discord_id: str) -> dict:
