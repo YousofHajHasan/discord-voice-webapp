@@ -82,6 +82,11 @@ class Chunk(Base):
     verified_transcription = Column(Text, nullable=True, default=None)
     validated_at = Column(DateTime, nullable=True, default=None)
     validated_by = Column(String, nullable=True, default=None)  # discord_id who acted
+    # Provenance for a chunk produced by the in-app trim tool: the ORIGINAL
+    # chunk's filename it was cut from (same owner+date). NULL for normally
+    # recorded chunks. Enables auditing / undo of a "Trim & Accept" — the
+    # original is soft-deleted and this new _updated.wav row points back at it.
+    derived_from = Column(String, nullable=True, default=None)
 
     # Human-validation work-queue lease. SEPARATE from claimed_by/claimed_at above
     # (which the ASR transcription script uses) so the script and human validators
@@ -121,6 +126,7 @@ _CHUNK_COLUMN_MIGRATIONS = {
     "validation_claimed_by":  "VARCHAR",
     "validation_claimed_at":  "DATETIME",
     "duration":               "FLOAT",
+    "derived_from":           "VARCHAR",
 }
 
 # Indexes to (idempotently) ensure on the chunks table. The owner+status index
@@ -340,6 +346,53 @@ def measure_chunk_duration(discord_id: str, date: str, filename: str, stored_pat
     DB. None if missing/unreadable. Safe to call before opening a write txn."""
     path = _disk_path(discord_id, date, filename, stored_path)
     return compute_wav_duration(path) if path else None
+
+
+def trim_wav(src_path: str, dst_path: str, start_sec: float, end_sec: float):
+    """
+    Write a NEW wav at dst_path holding only [start_sec, end_sec] of src_path,
+    losslessly — a raw PCM frame copy with the SAME channels / sample width /
+    rate (no decode, no re-encode). Returns the new duration in seconds, or None
+    if the source is unreadable or the range is empty after clamping.
+
+    Does NO database access (mirrors compute_wav_duration) so it is safe to call
+    with no transaction open — the network-volume read+write must never hold
+    SQLite's single write lock. Writes to a temp file then atomically os.replace()s
+    it into place, so a half-written .wav is never visible to a concurrent reader.
+    """
+    try:
+        with wave.open(src_path, "rb") as w:
+            rate = w.getframerate()
+            nframes = w.getnframes()
+            nchannels = w.getnchannels()
+            sampwidth = w.getsampwidth()
+            if not rate or not nframes:
+                return None
+            start_f = max(0, min(nframes, int(round(start_sec * rate))))
+            end_f = max(0, min(nframes, int(round(end_sec * rate))))
+            if end_f - start_f < 1:
+                return None
+            w.setpos(start_f)
+            frames = w.readframes(end_f - start_f)
+    except Exception:
+        return None
+
+    tmp = f"{dst_path}.{os.getpid()}.tmp"
+    try:
+        with wave.open(tmp, "wb") as out:
+            out.setnchannels(nchannels)
+            out.setsampwidth(sampwidth)
+            out.setframerate(rate)
+            out.writeframes(frames)
+        os.replace(tmp, dst_path)          # atomic within the same directory
+    except Exception:
+        try:
+            if os.path.exists(tmp):
+                os.remove(tmp)
+        except OSError:
+            pass
+        return None
+    return (end_f - start_f) / float(rate)
 
 
 def backfill_durations(batch_size: int = DURATION_BACKFILL_BATCH) -> int:

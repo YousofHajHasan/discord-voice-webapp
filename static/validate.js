@@ -60,6 +60,7 @@ const editor = new ChunkEditor(host, {
   onAccept: (text) => decide('/accept', 'verified', { transcription: text }),
   onIssue:  (text) => decide('/issue',  'issue',    { transcription: text }),
   onReject: ()     => decide('/reject', 'rejected', {}),
+  onTrimAccept: (text, start, end) => trimAccept(text, start, end),
 });
 
 startBtn.onclick = start;
@@ -237,6 +238,51 @@ async function decide(endpoint, newStatus, body) {
 
   it.status = newStatus;                                  // apply locally — no full refetch
   if (body.transcription !== undefined) it.verified_transcription = body.transcription;
+
+  if (wasFrontier) {
+    frontier++;
+    pendingTotal = Math.max(0, pendingTotal - 1);
+    if (!noMore && (buffer.length - frontier) <= PREFETCH_AT_REMAINING) {
+      if (frontier >= buffer.length) await fetchBatch();        // genuinely out of data — wait
+      else fetchBatch().then(() => render(false));              // prefetch in background
+    }
+    pos = frontier < buffer.length ? frontier : buffer.length - 1;
+  }
+  render();
+}
+
+// Trim & Accept: cut the head/tail, save the result as a verified _updated chunk,
+// then advance. Mirrors decide()'s local-apply + frontier-advance (no refetch);
+// the server returns the new chunk, which replaces the original in the buffer so
+// Back-navigation shows the cleaned, verified clip.
+async function trimAccept(text, start, end) {
+  const it = buffer[pos];
+  if (!it) return;
+  const wasFrontier = pos === frontier;
+
+  const res = await fetch(`${API}/trim_accept`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      owner_id: it.owner_id, date: it.date, filename: it.filename,
+      start, end, transcription: text,
+    }),
+  });
+
+  if (res.status === 409) {
+    buffer.splice(pos, 1);
+    if (frontier > pos) frontier--;
+    pendingTotal = Math.max(0, pendingTotal - 1);
+    if (pos > buffer.length - 1) pos = Math.max(0, buffer.length - 1);
+    render();
+    if (!noMore && (buffer.length - frontier) <= PREFETCH_AT_REMAINING) fetchBatch().then(() => render(false));
+    flash('That chunk was just validated by someone else — skipping it.');
+    return;
+  }
+  if (!res.ok) { alert('Trim failed (' + res.status + '). Please try again.'); return; }
+
+  const json = await res.json().catch(() => ({}));
+  if (json.chunk) buffer[pos] = json.chunk;   // swap in the trimmed, verified clip
+  else it.status = 'verified';
 
   if (wasFrontier) {
     frontier++;

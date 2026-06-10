@@ -80,5 +80,27 @@
 .ce-reject { border-color: rgba(239,68,68,0.3); background: var(--red-subtle); color: var(--red); }
 .ce-reject:hover:not(:disabled) { background: var(--red); color: #fff; border-color: var(--red); }
 
+/* Trim mode: toggle button, waveform cursor, kept-range bar, morphed accept */
+.ce-trimtoggle {
+    flex-shrink: 0; width: 34px; height: 34px; border-radius: 9px; cursor: pointer;
+    border: 1px solid var(--border); background: var(--surface-2); color: var(--muted);
+    font-size: 15px; line-height: 1; transition: all 0.15s;
+}
+.ce-trimtoggle:hover { color: var(--text); border-color: var(--border-hover); }
+.ce-trimtoggle.active { color: var(--gold); border-color: var(--gold); background: var(--gold-subtle); }
+.ce.trimming .ce-wave { cursor: ew-resize; }
+
+.ce-trim {
+    display: flex; align-items: center; justify-content: space-between; gap: 12px;
+    margin-top: -8px; padding: 9px 12px;
+    background: var(--gold-subtle); border: 1px dashed rgba(245,158,11,0.45); border-radius: 8px;
+    font-size: 12px;
+}
+.ce-trim-hint { color: var(--muted); }
+.ce-trim-keep { flex-shrink: 0; font-family: 'DM Mono', monospace; color: var(--gold); white-space: nowrap; }
+
+.ce-accept.trim { border-color: rgba(245,158,11,0.35); background: var(--gold-subtle); color: var(--gold); }
+.ce-accept.trim:hover:not(:disabled) { background: var(--gold); color: #1a1a1a; border-color: var(--gold); }
+
 /* Auto-RTL: Arabic transcriptions read right-to-left */
 .ce-text[dir="rtl"] { text-align: right; }

@@ -14,12 +14,13 @@ Status model (Chunk.validation_status):
     rejected — no understandable speech; soft-rejected. .wav stays on disk but
                it's hidden from the queue and the dashboard.
 """
+import os
 from datetime import datetime, timezone, timedelta
 
 from sqlalchemy import or_, update, select, func, case
 from database import (
     SessionLocal, Chunk, AccessGrant, User, _resolve_filepath,
-    measure_chunk_duration, VALIDATION_LEASE_MINUTES,
+    measure_chunk_duration, trim_wav, RECORDINGS_PATH, VALIDATION_LEASE_MINUTES,
 )
 
 # Statuses that count as "still to validate" for the Insights remaining total.
@@ -402,11 +403,105 @@ def reject_chunk(viewer_id: str, owner_id: str, date: str, filename: str) -> str
 
 def issue_chunk(viewer_id: str, owner_id: str, date: str, filename: str, text: str) -> str:
     """
-    Flag a chunk as 'issue' — real speech that needs trimming/editing. File
-    stays on disk; any typed text/note is saved (so a future trim tool and the
-    submissions view keep the context). Empty text allowed.
+    Flag a chunk as 'issue' — real speech that needs trimming/editing that can't
+    be fixed by an edge-trim (e.g. noise in the MIDDLE). File stays on disk; any
+    typed text/note is saved so the submissions view keeps the context. Empty
+    text allowed. (Head/tail noise is handled in-place by trim_accept_chunk.)
     """
     return _decide(viewer_id, owner_id, date, filename, "issue", text)
+
+
+def trim_accept_chunk(viewer_id: str, owner_id: str, date: str, filename: str,
+                      start: float, end: float, text: str):
+    """
+    One-step "Trim & Accept": losslessly write a trimmed copy of a chunk as
+    "{stem}_updated.wav", soft-delete the original, and register the new file as a
+    VERIFIED chunk — carrying over the raw ASR transcription, the human text, the
+    exact new duration, and derived_from (provenance / undo).
+
+    Edge-trim only: `start`/`end` are the kept window in SECONDS, after the
+    validator cut dead air / noise off the head and/or tail. (Middle problems are
+    a reject/issue, not a trim.) Returns (result, new_chunk | None):
+      "ok"       — trimmed + verified; new_chunk is the serialized replacement
+      "denied"   — viewer can't access this owner
+      "notfound" — original missing/deleted, or the trim range was empty/unreadable
+      "conflict" — original already decided by a DIFFERENT validator
+
+    Like _decide()/claim_pending_window(), the slow WAV read+write happens with NO
+    DB transaction open, so it never holds SQLite's single write lock during the
+    network-volume file I/O: a short read txn validates + captures the source, the
+    file work runs off the lock, then a short write txn flips is_deleted and
+    upserts the new row.
+    """
+    if not can_access(viewer_id, owner_id):
+        return "denied", None
+
+    chunk_id = f"{owner_id}:{date}:{filename}"
+
+    # 1) Validate the original and grab its path + ASR text, then drop the lock.
+    with SessionLocal() as db:
+        row = db.get(Chunk, chunk_id)
+        if not row or row.is_deleted:
+            return "notfound", None
+        # Only an undecided chunk (or one we ourselves last touched) may be
+        # trimmed — never clobber another validator's decision.
+        if (row.validation_status or "pending") != "pending" and row.validated_by not in (None, viewer_id):
+            return "conflict", None
+        src_path = _resolve_filepath(row)      # heals a stale path if needed
+        asr_text = row.transcription
+    if not src_path:
+        return "notfound", None
+
+    # 2) Trim on disk, OFF the lock, into the canonical ID-folder location.
+    stem = filename[:-4] if filename.lower().endswith(".wav") else filename
+    new_filename = f"{stem}_updated.wav"
+    new_id = f"{owner_id}:{date}:{new_filename}"
+    new_path = os.path.join(RECORDINGS_PATH, owner_id, "chunks", date, new_filename)
+    os.makedirs(os.path.dirname(new_path), exist_ok=True)
+    new_duration = trim_wav(src_path, new_path, float(start), float(end))
+    if new_duration is None:
+        return "notfound", None                # empty/invalid range or unreadable
+
+    # 3) Short write txn: soft-delete the original, upsert the verified new chunk.
+    now = datetime.now(timezone.utc)
+    with SessionLocal() as db:
+        orig = db.get(Chunk, chunk_id)
+        # Re-check the decision race that could have closed while we trimmed.
+        bad = (not orig or orig.is_deleted)
+        conflict = (not bad
+                    and (orig.validation_status or "pending") != "pending"
+                    and orig.validated_by not in (None, viewer_id))
+        if bad or conflict:
+            try:
+                os.remove(new_path)            # don't leave an orphan file behind
+            except OSError:
+                pass
+            return ("notfound" if bad else "conflict"), None
+
+        orig.is_deleted = True
+        orig.validation_claimed_by = None
+        orig.validation_claimed_at = None
+
+        new_row = db.get(Chunk, new_id)        # supersede a prior _updated, if any
+        if new_row is None:
+            new_row = Chunk(id=new_id, discord_id=owner_id, date=date,
+                            filename=new_filename, filepath=new_path)
+            db.add(new_row)
+        else:
+            new_row.filepath = new_path
+        new_row.is_deleted = False
+        new_row.transcription = asr_text
+        new_row.verified_transcription = text
+        new_row.duration = new_duration
+        new_row.derived_from = filename
+        new_row.validation_status = "verified"
+        new_row.validated_at = now
+        new_row.validated_by = viewer_id
+        new_row.validation_claimed_by = None
+        new_row.validation_claimed_at = None
+        db.commit()
+        new_chunk = _serialize(new_row)
+    return "ok", new_chunk
 
 
 def resolve_chunk_file(viewer_id: str, owner_id: str, date: str, filename: str):

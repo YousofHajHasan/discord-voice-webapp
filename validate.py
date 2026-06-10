@@ -211,6 +211,37 @@ async def api_issue(request: Request):
     return _decide_response(vdb.issue_chunk(user["id"], owner_id, date, filename, text), "issue")
 
 
+@router.post("/validate/api/trim_accept")
+async def api_trim_accept(request: Request):
+    """
+    One-step "Trim & Accept": cut dead air / noise off the head and/or tail of a
+    chunk and accept it in a single action. Writes "{stem}_updated.wav",
+    soft-deletes the original, and returns the new VERIFIED chunk so the client
+    can swap it into its buffer. `start`/`end` are the kept window in seconds.
+    """
+    user = _require_user(request)
+    body = await request.json()
+    owner_id = str(body.get("owner_id", ""))
+    date = str(body.get("date", ""))
+    filename = str(body.get("filename", ""))
+    _safe(owner_id, date, filename)
+    try:
+        start = float(body.get("start", 0))
+        end = float(body.get("end", 0))
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="Invalid trim range")
+    text = (body.get("transcription") or "").strip()
+
+    result, chunk = vdb.trim_accept_chunk(user["id"], owner_id, date, filename, start, end, text)
+    if result == "ok":
+        return JSONResponse({"ok": True, "status": "verified", "chunk": chunk})
+    if result == "conflict":
+        raise HTTPException(status_code=409, detail="This chunk was already validated by someone else.")
+    if result == "denied":
+        raise HTTPException(status_code=404, detail="Chunk not found or access denied")
+    raise HTTPException(status_code=404, detail="Chunk not found, missing audio, or empty trim range")
+
+
 # ── Grant-aware audio stream ──────────────────────────────────────────────────
 
 @router.get("/validate/audio/{owner_id}/{date}/{filename}")

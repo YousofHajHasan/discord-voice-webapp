@@ -16,6 +16,8 @@
    ────────────────────────────────────────────────────────────────────────── */
 (function (global) {
   const RTL_RE = /[؀-ۿݐ-ݿࢠ-ࣿﭐ-﷿ﹰ-﻿]/;
+  const HANDLE_HIT = 10;    // px tolerance for grabbing a trim handle
+  const MIN_KEEP   = 0.05;  // seconds — smallest keepable window
 
   const PLAY_ICON  = '<svg class="icon-play" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>';
   const PAUSE_ICON = '<svg class="icon-pause" viewBox="0 0 24 24"><path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/></svg>';
@@ -27,6 +29,7 @@
       this.onAccept  = opts.onAccept || (async () => {});
       this.onReject  = opts.onReject || (async () => {});
       this.onIssue   = opts.onIssue || null;   // optional 3rd action
+      this.onTrimAccept = opts.onTrimAccept || null;  // optional "Trim & Accept"
       this.acceptLabel = opts.acceptLabel || 'Accept';
       this.rejectLabel = opts.rejectLabel || 'Delete';
       this.issueLabel  = opts.issueLabel  || 'Issue';
@@ -37,6 +40,14 @@
       this.raf     = null;
       this.objUrl  = null;
       this.chunk   = null;
+
+      // Edge-trim state. trimMode shows two draggable handles on the waveform;
+      // [trimStart, trimEnd] (seconds) is the kept window. _dragHandle is the
+      // handle being dragged ('start' | 'end' | null).
+      this.trimMode    = false;
+      this.trimStart   = 0;
+      this.trimEnd     = 0;
+      this._dragHandle = null;
 
       this._buildDom();
       this._wireAudio();
@@ -56,6 +67,11 @@
           <button class="ce-play" title="Play / pause (Space)">${PLAY_ICON}${PAUSE_ICON}</button>
           <canvas class="ce-wave"></canvas>
           <span class="ce-time">0:00 / 0:00</span>
+          <button class="ce-trimtoggle" type="button" title="Trim silence/noise off the start or end">✂</button>
+        </div>
+        <div class="ce-trim" style="display:none">
+          <span class="ce-trim-hint">Drag the edges inward to cut off the start/end — the middle stays intact.</span>
+          <span class="ce-trim-keep"></span>
         </div>
         <div class="ce-text-label">Transcription</div>
         <textarea class="ce-text" placeholder="Type what is said in this clip…"></textarea>
@@ -77,6 +93,9 @@
       this.playBtn  = this.el.querySelector('.ce-play');
       this.canvas   = this.el.querySelector('.ce-wave');
       this.timeEl   = this.el.querySelector('.ce-time');
+      this.trimBtn  = this.el.querySelector('.ce-trimtoggle');
+      this.trimEl   = this.el.querySelector('.ce-trim');
+      this.trimKeepEl = this.el.querySelector('.ce-trim-keep');
       this.textEl   = this.el.querySelector('.ce-text');
       this.asrEl     = this.el.querySelector('.ce-asr');
       this.asrTextEl = this.el.querySelector('.ce-asr-text');
@@ -89,9 +108,13 @@
       this.rejectBtn.textContent = this.rejectLabel;
       this.issueBtn.textContent  = this.issueLabel;
       if (!this.onIssue) this.issueBtn.style.display = 'none';  // hide if not wired
+      if (!this.onTrimAccept) this.trimBtn.style.display = 'none';  // trim only where wired
 
       this.playBtn.addEventListener('click', () => this.togglePlay());
-      this.canvas.addEventListener('click', (e) => this._seek(e));
+      this.trimBtn.addEventListener('click', () => this._toggleTrim());
+      this.canvas.addEventListener('pointerdown', (e) => this._onPointerDown(e));
+      window.addEventListener('pointermove', (e) => this._onPointerMove(e));
+      window.addEventListener('pointerup', () => this._onPointerUp());
       this.textEl.addEventListener('input', () => this._applyDir());
       this.asrUseBtn.addEventListener('click', () => {
         this.textEl.value = this.asrTextEl.textContent;
@@ -101,8 +124,13 @@
 
       this.acceptBtn.addEventListener('click', async () => {
         this._busy(true);
-        try { await this.onAccept(this.textEl.value); }
-        finally { this._busy(false); }
+        try {
+          if (this._hasTrim() && this.onTrimAccept) {
+            await this.onTrimAccept(this.textEl.value, this.trimStart, this.trimEnd);
+          } else {
+            await this.onAccept(this.textEl.value);
+          }
+        } finally { this._busy(false); }
       });
       this.rejectBtn.addEventListener('click', async () => {
         this._busy(true);
@@ -141,8 +169,8 @@
     // ── Public ────────────────────────────────────────────────────────────
     setActionLabels(acceptLabel, rejectLabel) {
       this.acceptLabel = acceptLabel; this.rejectLabel = rejectLabel;
-      this.acceptBtn.textContent = acceptLabel;
       this.rejectBtn.textContent = rejectLabel;
+      this._refreshPrimary();   // keeps the "Trim & Accept" morph intact
     }
 
     async load(chunk) {
@@ -170,8 +198,9 @@
         this.asrEl.style.display = 'none';
       }
 
-      // reset playback + waveform
+      // reset playback + waveform + trim state
       this._stop();
+      this._resetTrim(chunk.status);
       this.peaks = null;
       this._drawWave();
       this.timeEl.textContent = '0:00 / 0:00';
@@ -205,6 +234,14 @@
       if (!this.audio.src) return;
       if (this.audio.paused) {
         if (this.audioCtx && this.audioCtx.state === 'suspended') this.audioCtx.resume();
+        // In trim mode, keep playback inside the kept window so you preview
+        // exactly what "Trim & Accept" will save.
+        if (this.trimMode) {
+          const t = this.audio.currentTime;
+          if (t < this.trimStart || t >= this.trimEnd - 0.005) {
+            try { this.audio.currentTime = this.trimStart; } catch (e) {}
+          }
+        }
         this.audio.play().catch(() => {});
       } else {
         this.audio.pause();
@@ -217,15 +254,106 @@
       this._stopLoop();
     }
 
-    _seek(e) {
-      if (!this.audio.duration) return;
+    // Pointer: drag a trim handle if grabbed, otherwise seek. In trim mode a
+    // plain click seeks only WITHIN the kept window.
+    _onPointerDown(e) {
+      const dur = this.audio.duration;
+      if (!dur || !isFinite(dur)) return;
       const r = this.canvas.getBoundingClientRect();
-      const ratio = Math.min(1, Math.max(0, (e.clientX - r.left) / r.width));
-      this.audio.currentTime = ratio * this.audio.duration;
+      const px = e.clientX - r.left;
+      const time = Math.min(dur, Math.max(0, (px / r.width) * dur));
+      if (this.trimMode) {
+        const xs = (this.trimStart / dur) * r.width;
+        const xe = (this.trimEnd   / dur) * r.width;
+        if (Math.abs(px - xs) <= HANDLE_HIT) this._dragHandle = 'start';
+        else if (Math.abs(px - xe) <= HANDLE_HIT) this._dragHandle = 'end';
+        if (this._dragHandle) {
+          try { this.canvas.setPointerCapture(e.pointerId); } catch (_) {}
+          e.preventDefault();
+          return;
+        }
+        this.audio.currentTime = Math.min(this.trimEnd, Math.max(this.trimStart, time));
+      } else {
+        this.audio.currentTime = time;
+      }
       this._drawWave();
     }
 
-    _loop()     { this._stopLoop(); const step = () => { this._drawWave(); this.raf = requestAnimationFrame(step); }; this.raf = requestAnimationFrame(step); }
+    _onPointerMove(e) {
+      if (!this._dragHandle) return;
+      const dur = this.audio.duration;
+      if (!dur || !isFinite(dur)) return;
+      const r = this.canvas.getBoundingClientRect();
+      const time = Math.min(dur, Math.max(0, ((e.clientX - r.left) / r.width) * dur));
+      if (this._dragHandle === 'start') {
+        this.trimStart = Math.max(0, Math.min(time, this.trimEnd - MIN_KEEP));
+      } else {
+        this.trimEnd = Math.min(dur, Math.max(time, this.trimStart + MIN_KEEP));
+      }
+      this._drawWave();
+      this._refreshTrimInfo();
+      this._refreshPrimary();
+    }
+
+    _onPointerUp() { this._dragHandle = null; }
+
+    _toggleTrim() {
+      const dur = this.audio.duration;
+      if (!this.onTrimAccept || !dur || !isFinite(dur)) return;
+      this.trimMode = !this.trimMode;
+      if (this.trimMode) { this.trimStart = 0; this.trimEnd = dur; }
+      this._dragHandle = null;
+      this.trimBtn.classList.toggle('active', this.trimMode);
+      this.el.classList.toggle('trimming', this.trimMode);
+      this.trimEl.style.display = this.trimMode ? 'flex' : 'none';
+      this._refreshTrimInfo();
+      this._drawWave();
+      this._refreshPrimary();
+    }
+
+    // Trim is only offered on pending chunks (the backend rejects deciding an
+    // already-decided one). load() calls this to clear state per chunk.
+    _resetTrim(status) {
+      this.trimMode = false;
+      this._dragHandle = null;
+      const canTrim = !!this.onTrimAccept && (!status || status === 'pending');
+      this.trimBtn.style.display = canTrim ? '' : 'none';
+      this.trimBtn.classList.remove('active');
+      this.el.classList.remove('trimming');
+      this.trimEl.style.display = 'none';
+      this._refreshPrimary();
+    }
+
+    // A trim is "real" only once a handle has actually moved in from an edge.
+    _hasTrim() {
+      const dur = this.audio.duration;
+      if (!this.trimMode || !dur || !isFinite(dur)) return false;
+      return this.trimStart > 0.02 || this.trimEnd < dur - 0.02;
+    }
+
+    _refreshPrimary() {
+      const trim = this._hasTrim() && !!this.onTrimAccept;
+      this.acceptBtn.textContent = trim ? 'Trim & Accept' : this.acceptLabel;
+      this.acceptBtn.classList.toggle('trim', trim);
+    }
+
+    _refreshTrimInfo() {
+      const dur = this.audio.duration || 0;
+      const keep = Math.max(0, this.trimEnd - this.trimStart);
+      this.trimKeepEl.textContent = `Keeping ${fmt(keep)} of ${fmt(dur)}`;
+    }
+
+    // Stop playback at the end handle so the preview never bleeds into the part
+    // that's about to be cut. Runs every animation frame while playing.
+    _enforceTrimBounds() {
+      if (!this.trimMode || this.audio.paused) return;
+      if (this.audio.currentTime >= this.trimEnd - 0.004) {
+        this.audio.pause();
+        try { this.audio.currentTime = this.trimEnd; } catch (e) {}
+      }
+    }
+
+    _loop()     { this._stopLoop(); const step = () => { this._enforceTrimBounds(); this._drawWave(); this.raf = requestAnimationFrame(step); }; this.raf = requestAnimationFrame(step); }
     _stopLoop() { if (this.raf) { cancelAnimationFrame(this.raf); this.raf = null; } }
 
     _updateTime() {
@@ -273,6 +401,21 @@
         const y = (h - barH) / 2;
         ctx.fillStyle = (i / n) <= prog ? '#22c55e' : '#2e2e4e';
         ctx.fillRect(x, y, bw, barH);
+      }
+
+      // Trim overlay: dim the head/tail that will be cut, draw the two handles.
+      if (this.trimMode && this.audio.duration && isFinite(this.audio.duration)) {
+        const dur = this.audio.duration;
+        const xs = (this.trimStart / dur) * w;
+        const xe = (this.trimEnd / dur) * w;
+        ctx.fillStyle = 'rgba(8,8,18,0.62)';
+        ctx.fillRect(0, 0, xs, h);
+        ctx.fillRect(xe, 0, w - xe, h);
+        ctx.fillStyle = '#f59e0b';                 // gold = editing
+        ctx.fillRect(xs - 1, 0, 2, h);
+        ctx.fillRect(xe - 1, 0, 2, h);
+        ctx.fillRect(xs - 4, (h - 18) / 2, 8, 18); // grips
+        ctx.fillRect(xe - 4, (h - 18) / 2, 8, 18);
       }
     }
 
