@@ -35,10 +35,20 @@ const editor = new ChunkEditor(modalEditor, {
   acceptLabel: 'Accept',
   rejectLabel: 'Reject',
   issueLabel: 'Issue',
-  onAccept: (text) => decide('/accept', { transcription: text }),
-  onIssue:  (text) => decide('/issue',  { transcription: text }),
-  onReject: ()     => decide('/reject', {}),
+  onAccept: (text, labels) => decide('/accept', { transcription: text, labels }),
+  onIssue:  (text)         => decide('/issue',  { transcription: text }),
+  onReject: ()             => decide('/reject', {}),
 });
+
+// Load the label taxonomy so the modal editor shows the chips (re-accepting a
+// chunk requires >=1 label, matching the validate page + the backend).
+(async () => {
+  try {
+    const res = await fetch(API + '/labels');
+    const json = await res.json();
+    if (json.labels) editor.setLabels(json.labels);
+  } catch (_) { /* chips just won't show; the backend still enforces */ }
+})();
 
 async function postJSON(url, body) {
   const res = await fetch(url, {

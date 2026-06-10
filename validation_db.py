@@ -21,11 +21,49 @@ from sqlalchemy import or_, update, select, func, case
 from database import (
     SessionLocal, Chunk, AccessGrant, User, _resolve_filepath,
     measure_chunk_duration, trim_wav, RECORDINGS_PATH, VALIDATION_LEASE_MINUTES,
+    LABEL_KEYS, LABEL_NORMAL_KEY,
 )
 
 # Statuses that count as "still to validate" for the Insights remaining total.
 # issue is included on purpose (flagged-but-not-finished work — see get_insights).
 REMAINING_STATUSES = ["pending", "issue"]
+
+# ── Content-classification taxonomy ───────────────────────────────────────────
+# Single source of truth for the validator's label chips: key (== DB column ==
+# JSON/JS key, see database.LABEL_KEYS) + display label + one-line description.
+# Re-phrasing a label is a one-line change here and needs no DB migration — the
+# internal keys stay frozen. `exclusive` marks "Normal" as the mutually-exclusive
+# "nothing special" choice.
+LABELS = [
+    {"key": "label_laugh",   "label": "Laughter",            "desc": "Audible laughing."},
+    {"key": "label_abusive", "label": "Abusive / profanity", "desc": "Insults, slurs, or strong profanity."},
+    {"key": "label_gaming",  "label": "Gaming talk",         "desc": "Gaming / stream chatter."},
+    {"key": "label_sports",  "label": "Sports talk",         "desc": "Sports discussion."},
+    {"key": "label_english", "label": "Contains English",    "desc": "English words mixed in (code-switching)."},
+    {"key": "label_singing", "label": "Singing",             "desc": "Someone is actually singing."},
+    {"key": "label_normal",  "label": "Normal",              "desc": "Ordinary speech — nothing special.", "exclusive": True},
+]
+# Guard against drift between the UI taxonomy and the DB columns.
+assert {l["key"] for l in LABELS} == set(LABEL_KEYS), "LABELS keys must match database.LABEL_KEYS"
+
+
+def _clean_labels(labels):
+    """
+    Normalize a client label selection into {key: bool} for every LABEL_KEY, or
+    return None if the selection is INVALID for verifying a chunk:
+      - nothing selected (>=1 is required), or
+      - `normal` combined with any other label (the exclusive "nothing special"
+        choice).
+    Unknown keys in the input are ignored.
+    """
+    labels = labels or {}
+    out = {k: bool(labels.get(k)) for k in LABEL_KEYS}
+    chosen = [k for k, v in out.items() if v]
+    if not chosen:
+        return None
+    if LABEL_NORMAL_KEY in chosen and len(chosen) > 1:
+        return None
+    return out
 
 
 # ── Access grants (delegated validation) ──────────────────────────────────────
@@ -160,6 +198,7 @@ def _serialize(row) -> dict:
         "verified_transcription": row.verified_transcription,
         "status": row.validation_status or "pending",
         "validated_at": row.validated_at.isoformat() if row.validated_at else None,
+        "labels": {k: bool(getattr(row, k, False)) for k in LABEL_KEYS},
     }
 
 
@@ -349,7 +388,7 @@ def get_insights(owner_id: str) -> dict:
 # ── Mutations ─────────────────────────────────────────────────────────────────
 
 def _decide(viewer_id: str, owner_id: str, date: str, filename: str,
-            new_status: str, text) -> str:
+            new_status: str, text, labels=None) -> str:
     """
     Apply a validation decision. Returns one of:
       "ok"       — saved
@@ -380,6 +419,9 @@ def _decide(viewer_id: str, owner_id: str, date: str, filename: str,
             return "conflict"
         if text is not None:
             row.verified_transcription = text
+        if labels is not None:
+            for _k, _v in labels.items():
+                setattr(row, _k, _v)
         if row.duration is None and measured is not None:
             row.duration = measured
         row.validation_status = new_status
@@ -391,9 +433,17 @@ def _decide(viewer_id: str, owner_id: str, date: str, filename: str,
     return "ok"
 
 
-def accept_chunk(viewer_id: str, owner_id: str, date: str, filename: str, text: str) -> str:
-    """Mark a chunk verified and save the human transcription. Empty text allowed."""
-    return _decide(viewer_id, owner_id, date, filename, "verified", text)
+def accept_chunk(viewer_id: str, owner_id: str, date: str, filename: str,
+                 text: str, labels=None) -> str:
+    """
+    Mark a chunk verified and save the human transcription (empty text allowed).
+    Requires at least ONE content label, and `normal` must be on its own — returns
+    "nolabels" if the selection is invalid (the endpoint maps that to HTTP 400).
+    """
+    clean = _clean_labels(labels)
+    if clean is None:
+        return "nolabels"
+    return _decide(viewer_id, owner_id, date, filename, "verified", text, labels=clean)
 
 
 def reject_chunk(viewer_id: str, owner_id: str, date: str, filename: str) -> str:
@@ -412,7 +462,7 @@ def issue_chunk(viewer_id: str, owner_id: str, date: str, filename: str, text: s
 
 
 def trim_accept_chunk(viewer_id: str, owner_id: str, date: str, filename: str,
-                      start: float, end: float, text: str):
+                      start: float, end: float, text: str, labels=None):
     """
     One-step "Trim & Accept": losslessly write a trimmed copy of a chunk as
     "{stem}_updated.wav", soft-delete the original, and register the new file as a
@@ -423,6 +473,7 @@ def trim_accept_chunk(viewer_id: str, owner_id: str, date: str, filename: str,
     validator cut dead air / noise off the head and/or tail. (Middle problems are
     a reject/issue, not a trim.) Returns (result, new_chunk | None):
       "ok"       — trimmed + verified; new_chunk is the serialized replacement
+      "nolabels" — no content label chosen (or `normal` mixed with others)
       "denied"   — viewer can't access this owner
       "notfound" — original missing/deleted, or the trim range was empty/unreadable
       "conflict" — original already decided by a DIFFERENT validator
@@ -435,6 +486,10 @@ def trim_accept_chunk(viewer_id: str, owner_id: str, date: str, filename: str,
     """
     if not can_access(viewer_id, owner_id):
         return "denied", None
+    # Verifying requires >=1 label (normal exclusive) — fail BEFORE writing a file.
+    clean = _clean_labels(labels)
+    if clean is None:
+        return "nolabels", None
 
     chunk_id = f"{owner_id}:{date}:{filename}"
 
@@ -494,6 +549,8 @@ def trim_accept_chunk(viewer_id: str, owner_id: str, date: str, filename: str,
         new_row.verified_transcription = text
         new_row.duration = new_duration
         new_row.derived_from = filename
+        for _k, _v in clean.items():
+            setattr(new_row, _k, _v)
         new_row.validation_status = "verified"
         new_row.validated_at = now
         new_row.validated_by = viewer_id

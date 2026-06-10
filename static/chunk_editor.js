@@ -30,6 +30,11 @@
       this.onReject  = opts.onReject || (async () => {});
       this.onIssue   = opts.onIssue || null;   // optional 3rd action
       this.onTrimAccept = opts.onTrimAccept || null;  // optional "Trim & Accept"
+      // Content-classification labels (multi-label chips). The host supplies the
+      // taxonomy via opts.labels or setLabels(); verifying requires >=1 chosen.
+      this.labels      = null;     // [{key,label,desc,exclusive?}] or null
+      this._labelMeta  = {};       // key -> meta
+      this.labelState  = {};       // key -> bool (current selection)
       this.acceptLabel = opts.acceptLabel || 'Accept';
       this.rejectLabel = opts.rejectLabel || 'Delete';
       this.issueLabel  = opts.issueLabel  || 'Issue';
@@ -52,6 +57,7 @@
       this._buildDom();
       this._wireAudio();
       this._wireKeys();
+      if (opts.labels) this.setLabels(opts.labels);
     }
 
     // ── DOM ───────────────────────────────────────────────────────────────
@@ -80,6 +86,10 @@
           <span class="ce-asr-text" dir="auto"></span>
           <button type="button" class="ce-asr-use" title="Copy this suggestion into the box">use</button>
         </div>
+        <div class="ce-labels" style="display:none">
+          <div class="ce-labels-label">Labels — pick at least one to accept</div>
+          <div class="ce-chips"></div>
+        </div>
         <div class="ce-actions">
           <button class="ce-btn ce-reject"></button>
           <button class="ce-btn ce-issue"></button>
@@ -100,6 +110,8 @@
       this.asrEl     = this.el.querySelector('.ce-asr');
       this.asrTextEl = this.el.querySelector('.ce-asr-text');
       this.asrUseBtn = this.el.querySelector('.ce-asr-use');
+      this.labelsEl  = this.el.querySelector('.ce-labels');
+      this.chipsEl   = this.el.querySelector('.ce-chips');
       this.acceptBtn = this.el.querySelector('.ce-accept');
       this.rejectBtn = this.el.querySelector('.ce-reject');
       this.issueBtn  = this.el.querySelector('.ce-issue');
@@ -123,12 +135,13 @@
       });
 
       this.acceptBtn.addEventListener('click', async () => {
+        if (!this._labelsOk()) return;   // primary action verifies -> needs a label
         this._busy(true);
         try {
           if (this._hasTrim() && this.onTrimAccept) {
-            await this.onTrimAccept(this.textEl.value, this.trimStart, this.trimEnd);
+            await this.onTrimAccept(this.textEl.value, this.trimStart, this.trimEnd, this.getLabels());
           } else {
-            await this.onAccept(this.textEl.value);
+            await this.onAccept(this.textEl.value, this.getLabels());
           }
         } finally { this._busy(false); }
       });
@@ -142,6 +155,11 @@
         this._busy(true);
         try { await this.onIssue(this.textEl.value); }
         finally { this._busy(false); }
+      });
+
+      this.chipsEl.addEventListener('click', (e) => {
+        const b = e.target.closest('.ce-chip');
+        if (b) this._toggleChip(b.dataset.key);
       });
 
       window.addEventListener('resize', () => this._drawWave());
@@ -179,24 +197,31 @@
       this.dateEl.textContent = chunk.date;
       this._setStatus(chunk.status);
 
-      // Pending (never decided) -> prefill the ASR default as a helpful start.
-      // Decided (verified/issue/rejected) -> show exactly what was saved, even
-      // if empty. Accepting/saving an empty box intentionally clears the text
-      // and must NOT fall back to the default ASR value.
+      // Text shown in the box, in priority order:
+      //   saved human text present  -> show it (covers a re-opened chunk: pending
+      //       again but KEEPS its verified_transcription, so re-validating is
+      //       "add labels + accept", never a retype; also a normal decided chunk).
+      //   decided but no saved text -> empty (an explicit empty save stays empty;
+      //       never fall back to ASR).
+      //   fresh pending             -> prefill the ASR guess as a starting point.
       const decided = chunk.status && chunk.status !== 'pending';
-      const text = decided ? (chunk.verified_transcription || '') : (chunk.transcription || '');
+      const saved = chunk.verified_transcription;
+      const hasSaved = saved != null && saved !== '';
+      const text = hasSaved ? saved : (decided ? '' : (chunk.transcription || ''));
       this.textEl.value = text;
       this._applyDir();
 
-      // Greyed ASR reference: on a decided chunk the box shows your saved value,
-      // so surface the original machine guess underneath (with a "use" button).
+      // Greyed ASR reference: whenever the box shows saved human text, surface the
+      // original machine guess underneath (with a "use" button).
       const asr = (chunk.transcription || '').trim();
-      if (decided && asr) {
+      if ((decided || hasSaved) && asr) {
         this.asrTextEl.textContent = asr;
         this.asrEl.style.display = 'flex';
       } else {
         this.asrEl.style.display = 'none';
       }
+
+      this._initLabels(chunk.labels);
 
       // reset playback + waveform + trim state
       this._stop();
@@ -335,6 +360,66 @@
       const trim = this._hasTrim() && !!this.onTrimAccept;
       this.acceptBtn.textContent = trim ? 'Trim & Accept' : this.acceptLabel;
       this.acceptBtn.classList.toggle('trim', trim);
+      // The primary action always verifies -> require >=1 label (when the host
+      // wired a taxonomy). issue/reject are never gated.
+      this.acceptBtn.disabled = !this._labelsOk();
+      this.acceptBtn.title = this.acceptBtn.disabled ? 'Pick at least one label first' : '';
+    }
+
+    // ── Labels (multi-label content classification) ───────────────────────────
+    setLabels(list) {
+      this.labels = (list && list.length) ? list.slice() : null;
+      this._labelMeta = {};
+      this.labelState = {};
+      if (this.labels) {
+        for (const m of this.labels) { this._labelMeta[m.key] = m; this.labelState[m.key] = false; }
+        this.chipsEl.innerHTML = this.labels.map((m) =>
+          `<button type="button" class="ce-chip" data-key="${escHtml(m.key)}" title="${escHtml(m.desc || '')}">${escHtml(m.label)}</button>`
+        ).join('');
+        this.labelsEl.style.display = '';
+      } else {
+        this.chipsEl.innerHTML = '';
+        this.labelsEl.style.display = 'none';
+      }
+      if (this.chunk) this._initLabels(this.chunk.labels);
+      this._refreshPrimary();
+    }
+
+    getLabels() { return this.labels ? { ...this.labelState } : null; }
+
+    _labelsOk() {
+      if (!this.labels) return true;                 // host didn't wire labels
+      for (const k in this.labelState) if (this.labelState[k]) return true;
+      return false;                                  // >=1 required to verify
+    }
+
+    // `normal` is the mutually-exclusive "nothing special" choice: turning it on
+    // clears the others, and turning any other on clears it.
+    _toggleChip(key) {
+      const meta = this._labelMeta[key];
+      if (!meta) return;
+      const turningOn = !this.labelState[key];
+      if (turningOn && meta.exclusive) {
+        for (const k in this.labelState) this.labelState[k] = false;
+      } else if (turningOn) {
+        for (const m of this.labels) if (m.exclusive) this.labelState[m.key] = false;
+      }
+      this.labelState[key] = turningOn;
+      this._renderChips();
+      this._refreshPrimary();
+    }
+
+    _renderChips() {
+      if (!this.labels) return;
+      for (const b of this.chipsEl.querySelectorAll('.ce-chip'))
+        b.classList.toggle('on', !!this.labelState[b.dataset.key]);
+    }
+
+    _initLabels(labels) {
+      if (!this.labels) return;
+      labels = labels || {};
+      for (const m of this.labels) this.labelState[m.key] = !!labels[m.key];
+      this._renderChips();
     }
 
     _refreshTrimInfo() {
@@ -434,15 +519,21 @@
     }
 
     _busy(on) {
-      this.acceptBtn.disabled = on;
       this.rejectBtn.disabled = on;
       this.issueBtn.disabled = on;
+      if (on) this.acceptBtn.disabled = true;
+      else this._refreshPrimary();   // restore label/trim gating after an action
     }
   }
 
   function fmt(s) {
     if (!isFinite(s) || isNaN(s)) return '0:00';
     return Math.floor(s / 60) + ':' + String(Math.floor(s % 60)).padStart(2, '0');
+  }
+
+  function escHtml(s) {
+    return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;')
+                    .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
   }
 
   global.ChunkEditor = ChunkEditor;

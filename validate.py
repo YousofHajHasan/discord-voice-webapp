@@ -166,6 +166,14 @@ async def api_insights(request: Request, owner: str = ""):
     return vdb.get_insights(owner_id)
 
 
+@router.get("/validate/api/labels")
+async def api_labels(request: Request):
+    """The content-classification taxonomy (key + display label + description) the
+    validator picks from. Single source of truth: validation_db.LABELS."""
+    _require_user(request)
+    return {"labels": vdb.LABELS}
+
+
 def _decide_response(result: str, ok_status: str):
     """Map a vdb decision result -> HTTP response. 409 lets the client skip a
     chunk another validator already decided, without an error popup."""
@@ -173,6 +181,8 @@ def _decide_response(result: str, ok_status: str):
         return JSONResponse({"ok": True, "status": ok_status})
     if result == "conflict":
         raise HTTPException(status_code=409, detail="This chunk was already validated by someone else.")
+    if result == "nolabels":
+        raise HTTPException(status_code=400, detail="Select at least one label — and 'Normal' must be on its own.")
     raise HTTPException(status_code=404, detail="Chunk not found or access denied")
 
 
@@ -185,7 +195,8 @@ async def api_accept(request: Request):
     filename = str(body.get("filename", ""))
     _safe(owner_id, date, filename)
     text = (body.get("transcription") or "").strip()
-    return _decide_response(vdb.accept_chunk(user["id"], owner_id, date, filename, text), "verified")
+    labels = body.get("labels")
+    return _decide_response(vdb.accept_chunk(user["id"], owner_id, date, filename, text, labels), "verified")
 
 
 @router.post("/validate/api/reject")
@@ -231,12 +242,15 @@ async def api_trim_accept(request: Request):
     except (TypeError, ValueError):
         raise HTTPException(status_code=400, detail="Invalid trim range")
     text = (body.get("transcription") or "").strip()
+    labels = body.get("labels")
 
-    result, chunk = vdb.trim_accept_chunk(user["id"], owner_id, date, filename, start, end, text)
+    result, chunk = vdb.trim_accept_chunk(user["id"], owner_id, date, filename, start, end, text, labels)
     if result == "ok":
         return JSONResponse({"ok": True, "status": "verified", "chunk": chunk})
     if result == "conflict":
         raise HTTPException(status_code=409, detail="This chunk was already validated by someone else.")
+    if result == "nolabels":
+        raise HTTPException(status_code=400, detail="Select at least one label — and 'Normal' must be on its own.")
     if result == "denied":
         raise HTTPException(status_code=404, detail="Chunk not found or access denied")
     raise HTTPException(status_code=404, detail="Chunk not found, missing audio, or empty trim range")

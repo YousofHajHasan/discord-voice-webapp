@@ -102,5 +102,17 @@
 .ce-accept.trim { border-color: rgba(245,158,11,0.35); background: var(--gold-subtle); color: var(--gold); }
 .ce-accept.trim:hover:not(:disabled) { background: var(--gold); color: #1a1a1a; border-color: var(--gold); }
 
+/* Content-classification label chips (multi-label; pick >=1 to accept) */
+.ce-labels { display: flex; flex-direction: column; gap: 9px; margin-top: -4px; }
+.ce-labels-label { font-size: 11px; text-transform: uppercase; letter-spacing: 1.2px; color: var(--muted); }
+.ce-chips { display: flex; flex-wrap: wrap; gap: 8px; }
+.ce-chip {
+    cursor: pointer; padding: 7px 13px; border-radius: 999px; user-select: none;
+    border: 1px solid var(--border); background: var(--surface-2); color: var(--muted);
+    font-family: 'DM Mono', monospace; font-size: 12.5px; transition: all 0.15s;
+}
+.ce-chip:hover { color: var(--text); border-color: var(--border-hover); }
+.ce-chip.on { background: var(--accent-subtle); border-color: var(--accent); color: var(--accent); }
+
 /* Auto-RTL: Arabic transcriptions read right-to-left */
 .ce-text[dir="rtl"] { text-align: right; }

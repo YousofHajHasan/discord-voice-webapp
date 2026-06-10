@@ -57,10 +57,10 @@ const esc = (s) => String(s).replace(/[&<>"']/g, (c) =>
 const editor = new ChunkEditor(host, {
   audioBase: AUDIO_BASE,
   issueLabel: 'Issue',
-  onAccept: (text) => decide('/accept', 'verified', { transcription: text }),
-  onIssue:  (text) => decide('/issue',  'issue',    { transcription: text }),
-  onReject: ()     => decide('/reject', 'rejected', {}),
-  onTrimAccept: (text, start, end) => trimAccept(text, start, end),
+  onAccept: (text, labels) => decide('/accept', 'verified', { transcription: text, labels }),
+  onIssue:  (text)         => decide('/issue',  'issue',    { transcription: text }),
+  onReject: ()             => decide('/reject', 'rejected', {}),
+  onTrimAccept: (text, start, end, labels) => trimAccept(text, start, end, labels),
 });
 
 startBtn.onclick = start;
@@ -82,6 +82,14 @@ async function loadOwners() {
     activeOwner = owners.length ? owners[0].id : (json.viewer_id || null);
     if (activeOwner) ownerSelect.value = activeOwner;
   } catch (_) { /* dropdown stays empty; Start will retry */ }
+}
+
+async function loadLabels() {
+  try {
+    const res = await fetch(`${API}/labels`);
+    const json = await res.json();
+    if (json.labels) editor.setLabels(json.labels);
+  } catch (_) { /* chips just won't show; the backend still enforces >=1 */ }
 }
 
 ownerSelect.onchange = () => {
@@ -238,6 +246,7 @@ async function decide(endpoint, newStatus, body) {
 
   it.status = newStatus;                                  // apply locally — no full refetch
   if (body.transcription !== undefined) it.verified_transcription = body.transcription;
+  if (body.labels) it.labels = body.labels;               // so Back-nav shows the chosen labels
 
   if (wasFrontier) {
     frontier++;
@@ -255,7 +264,7 @@ async function decide(endpoint, newStatus, body) {
 // then advance. Mirrors decide()'s local-apply + frontier-advance (no refetch);
 // the server returns the new chunk, which replaces the original in the buffer so
 // Back-navigation shows the cleaned, verified clip.
-async function trimAccept(text, start, end) {
+async function trimAccept(text, start, end, labels) {
   const it = buffer[pos];
   if (!it) return;
   const wasFrontier = pos === frontier;
@@ -264,7 +273,7 @@ async function trimAccept(text, start, end) {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       owner_id: it.owner_id, date: it.date, filename: it.filename,
-      start, end, transcription: text,
+      start, end, transcription: text, labels,
     }),
   });
 
@@ -281,8 +290,8 @@ async function trimAccept(text, start, end) {
   if (!res.ok) { alert('Trim failed (' + res.status + '). Please try again.'); return; }
 
   const json = await res.json().catch(() => ({}));
-  if (json.chunk) buffer[pos] = json.chunk;   // swap in the trimmed, verified clip
-  else it.status = 'verified';
+  if (json.chunk) buffer[pos] = json.chunk;   // swap in the trimmed, verified clip (carries labels)
+  else { it.status = 'verified'; if (labels) it.labels = labels; }
 
   if (wasFrontier) {
     frontier++;
@@ -364,5 +373,6 @@ function doneCard(othersBusy) {
        <a href="/recordings/validate/submissions" style="color:var(--accent)">My Submissions</a>.</p></div>`;
 }
 
-// Populate the owner dropdown up front so the user can pick before starting.
+// Fetch the label taxonomy + populate the owner dropdown up front.
+loadLabels();
 loadOwners();

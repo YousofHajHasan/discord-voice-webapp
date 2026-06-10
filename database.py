@@ -27,6 +27,19 @@ Base = declarative_base()
 
 RECORDINGS_PATH = os.environ.get("RECORDINGS_PATH", "/app/recordings")
 
+# Content-classification label columns on `chunks` (multi-label). A chunk can
+# only become `verified` with at least one of these set — see
+# validation_db.accept_chunk / trim_accept_chunk and the self-healing
+# reopen_unlabeled_verified() migration. `label_normal` is the mutually-exclusive
+# "nothing special" choice. The display names live in validation_db.LABELS; this
+# tuple is the single source of truth for the column/key set (model columns,
+# auto-migration, serialization, and the re-open all derive from it).
+LABEL_KEYS = (
+    "label_laugh", "label_abusive", "label_gaming",
+    "label_sports", "label_english", "label_singing", "label_normal",
+)
+LABEL_NORMAL_KEY = "label_normal"
+
 
 class User(Base):
     __tablename__ = "users"
@@ -88,6 +101,19 @@ class Chunk(Base):
     # original is soft-deleted and this new _updated.wav row points back at it.
     derived_from = Column(String, nullable=True, default=None)
 
+    # ── Content-classification labels (multi-label; keys in LABEL_KEYS) ───────
+    # Validators tick these on the validate page. A chunk may carry several at
+    # once EXCEPT label_normal ("nothing special"), which is mutually exclusive.
+    # Verification requires >=1 true (enforced in validation_db); these power
+    # dataset filtering/balancing and gate accept + trim-accept.
+    label_laugh   = Column(Boolean, nullable=False, default=False)
+    label_abusive = Column(Boolean, nullable=False, default=False)
+    label_gaming  = Column(Boolean, nullable=False, default=False)
+    label_sports  = Column(Boolean, nullable=False, default=False)
+    label_english = Column(Boolean, nullable=False, default=False)
+    label_singing = Column(Boolean, nullable=False, default=False)
+    label_normal  = Column(Boolean, nullable=False, default=False)
+
     # Human-validation work-queue lease. SEPARATE from claimed_by/claimed_at above
     # (which the ASR transcription script uses) so the script and human validators
     # never contend for the same lock. A validator leases a window of pending
@@ -128,6 +154,10 @@ _CHUNK_COLUMN_MIGRATIONS = {
     "duration":               "FLOAT",
     "derived_from":           "VARCHAR",
 }
+# The multi-label classification columns auto-migrate from the single source of
+# truth in LABEL_KEYS, so adding a class is a one-line change there (not here).
+for _label_key in LABEL_KEYS:
+    _CHUNK_COLUMN_MIGRATIONS[_label_key] = "BOOLEAN DEFAULT 0"
 
 # Indexes to (idempotently) ensure on the chunks table. The owner+status index
 # makes the Insights SUM(duration) aggregates and the per-owner pending counts
@@ -169,11 +199,36 @@ def _ensure_indexes():
             conn.execute(text(f"CREATE INDEX IF NOT EXISTS {name} ON chunks {cols}"))
 
 
+def reopen_unlabeled_verified() -> int:
+    """
+    Enforce the invariant "verified => at least one content label". Any chunk
+    still marked `verified` with ALL label flags false is sent back to the pool
+    (status -> pending) — its verified_transcription is KEPT, so re-validating it
+    is just "tick the labels and re-accept", never a retype.
+
+    Idempotent + self-healing: once the >=1-label rule is enforced at write time
+    (validation_db.accept_chunk / trim_accept_chunk), no verified row can lack a
+    label, so after the first run this matches nothing. Safe to run on every
+    startup. One short write txn, no file I/O.
+    """
+    if "chunks" not in inspect(engine).get_table_names():
+        return 0
+    all_false = " AND ".join(f"{k} = 0" for k in LABEL_KEYS)
+    with engine.begin() as conn:
+        res = conn.execute(text(
+            "UPDATE chunks SET validation_status = 'pending', "
+            "validation_claimed_by = NULL, validation_claimed_at = NULL "
+            f"WHERE validation_status = 'verified' AND ({all_false})"
+        ))
+    return res.rowcount or 0
+
+
 def init_db():
     os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
     Base.metadata.create_all(engine)
     _run_light_migrations()
     _ensure_indexes()
+    reopen_unlabeled_verified()
 
 
 def upsert_user(discord_id: str, username: str, avatar_url: str):
