@@ -49,6 +49,17 @@ def _require_user(request: Request):
     return user
 
 
+def _require_admin(request: Request):
+    """Gate an admin-only route: 401 if logged out, 403 if not an admin. The admin
+    list lives in the DB (validation_db.is_admin) so it needs no redeploy, and this
+    server-side check is the real gate — hiding the button in the template is only
+    cosmetic."""
+    user = _require_user(request)
+    if not vdb.is_admin(user["id"]):
+        raise HTTPException(status_code=403, detail="Admins only")
+    return user
+
+
 def _safe(*parts):
     """Reject path-traversal in URL/body segments."""
     for p in parts:
@@ -63,7 +74,10 @@ async def validate_page(request: Request):
     user = get_current_user(request)
     if not user:
         return RedirectResponse("/recordings/")
-    return templates.TemplateResponse("validate.html", {"request": request, "user": user})
+    return templates.TemplateResponse(
+        "validate.html",
+        {"request": request, "user": user, "is_admin": vdb.is_admin(user["id"])},
+    )
 
 
 @router.get("/validate/submissions", response_class=HTMLResponse)
@@ -71,7 +85,25 @@ async def submissions_page(request: Request):
     user = get_current_user(request)
     if not user:
         return RedirectResponse("/recordings/")
-    return templates.TemplateResponse("submissions.html", {"request": request, "user": user})
+    return templates.TemplateResponse(
+        "submissions.html",
+        {"request": request, "user": user, "is_admin": vdb.is_admin(user["id"])},
+    )
+
+
+@router.get("/validate/admin", response_class=HTMLResponse)
+async def admin_page(request: Request):
+    """Admin-only dataset stats + admin management. Logged-in non-admins are
+    bounced to their own submissions; the gate is enforced again on every
+    /validate/api/admin/* call."""
+    user = get_current_user(request)
+    if not user:
+        return RedirectResponse("/recordings/")
+    if not vdb.is_admin(user["id"]):
+        return RedirectResponse("/recordings/validate/submissions")
+    return templates.TemplateResponse(
+        "admin.html", {"request": request, "user": user, "is_admin": True}
+    )
 
 
 # ── JSON API ──────────────────────────────────────────────────────────────────
@@ -172,6 +204,46 @@ async def api_labels(request: Request):
     validator picks from. Single source of truth: validation_db.LABELS."""
     _require_user(request)
     return {"labels": vdb.LABELS}
+
+
+# ── Admin: dataset stats + admin-list management ──────────────────────────────
+# Every route here is gated by _require_admin (403 for non-admins); the
+# template-level hiding of the Admin button/nav is only cosmetic.
+
+@router.get("/validate/api/admin/stats")
+async def api_admin_stats(request: Request):
+    """Whole-dataset + per-owner verified/remaining counts and audio totals."""
+    _require_admin(request)
+    return vdb.get_dataset_stats()
+
+
+@router.get("/validate/api/admin/admins")
+async def api_admin_list(request: Request):
+    _require_admin(request)
+    return {"admins": vdb.list_admins()}
+
+
+@router.post("/validate/api/admin/admins")
+async def api_admin_add(request: Request):
+    user = _require_admin(request)
+    body = await request.json()
+    new_id = str(body.get("discord_id", "")).strip()
+    if not vdb.add_admin(user["id"], new_id):
+        raise HTTPException(status_code=400, detail="Enter a valid Discord user ID (numbers only).")
+    return {"ok": True, "admins": vdb.list_admins()}
+
+
+@router.post("/validate/api/admin/admins/remove")
+async def api_admin_remove(request: Request):
+    _require_admin(request)
+    body = await request.json()
+    target_id = str(body.get("discord_id", "")).strip()
+    result = vdb.remove_admin(target_id)
+    if result == "last":
+        raise HTTPException(status_code=400, detail="Can't remove the last admin.")
+    if result == "notfound":
+        raise HTTPException(status_code=404, detail="That user isn't an admin.")
+    return {"ok": True, "admins": vdb.list_admins()}
 
 
 def _decide_response(result: str, ok_status: str):

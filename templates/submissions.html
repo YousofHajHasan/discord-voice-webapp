@@ -60,6 +60,8 @@
 
         /* Insights button */
         .title-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; flex-wrap: wrap; }
+        .title-actions { display: flex; align-items: center; gap: 10px; flex-shrink: 0; }
+        .title-actions a { text-decoration: none; }
         .insights-btn {
             flex-shrink: 0; display: inline-flex; align-items: center; gap: 9px;
             font-family: 'DM Mono', monospace; font-size: 13px; cursor: pointer;
@@ -142,6 +144,7 @@
         <a href="/recordings/dashboard" class="nav-link">Dashboard</a>
         <a href="/recordings/validate" class="nav-link">Validate</a>
         <a href="/recordings/validate/submissions" class="nav-link active">My Submissions</a>
+        {% if is_admin %}<a href="/recordings/validate/admin" class="nav-link">Admin</a>{% endif %}
         <span class="user-mini"><img src="{{ user.avatar }}" alt="{{ user.username }}"></span>
         <a href="/recordings/logout" class="logout-btn">Logout</a>
     </div>
@@ -153,14 +156,24 @@
             <h1 class="page-title">My Submissions</h1>
             <p class="page-subtitle">Everything you've accepted, flagged, or rejected. Tap one to edit and re-decide.</p>
         </div>
-        <button id="insights-btn" class="insights-btn">
-            <svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true">
-                <rect class="bar" x="0"    y="6" width="3.2" height="8"  rx="1"></rect>
-                <rect class="bar" x="5.4"  y="2" width="3.2" height="12" rx="1"></rect>
-                <rect class="bar" x="10.8" y="9" width="3.2" height="5"  rx="1"></rect>
-            </svg>
-            Insights
-        </button>
+        <div class="title-actions">
+            {% if is_admin %}
+            <a href="/recordings/validate/admin" class="insights-btn" title="Dataset stats &amp; admin">
+                <svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true">
+                    <path class="bar" d="M7 0.6 1.5 2.8v3.1c0 3 2.3 5.9 5.5 7 3.2-1.1 5.5-4 5.5-7V2.8L7 0.6Z"></path>
+                </svg>
+                Admin
+            </a>
+            {% endif %}
+            <button id="insights-btn" class="insights-btn">
+                <svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true">
+                    <rect class="bar" x="0"    y="6" width="3.2" height="8"  rx="1"></rect>
+                    <rect class="bar" x="5.4"  y="2" width="3.2" height="12" rx="1"></rect>
+                    <rect class="bar" x="10.8" y="9" width="3.2" height="5"  rx="1"></rect>
+                </svg>
+                Insights
+            </button>
+        </div>
     </div>
 
     <div id="start" class="start-card">

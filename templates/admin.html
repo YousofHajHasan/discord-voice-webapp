@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Admin · Dataset</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/recordings/static/theme.css">
+    <style>
+        .admin-sub { font-size: 12.5px; color: var(--muted); margin-bottom: 22px; }
+
+        /* Summary cards */
+        .stat-cards { display: flex; gap: 14px; flex-wrap: wrap; margin: 8px 0 22px; }
+        .stat-card {
+            flex: 1 1 150px; background: var(--surface); border: 1px solid var(--border);
+            border-radius: 14px; padding: 16px 18px;
+        }
+        .stat-num { font-family: 'Syne', sans-serif; font-weight: 800; font-size: 30px; line-height: 1; color: var(--text); }
+        .stat-num small { font-size: 15px; font-weight: 700; color: var(--muted); margin-left: 1px; }
+        .stat-lbl { font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); margin-top: 8px; }
+
+        /* Split completion bar (shared look with Insights) */
+        .pbar { display: flex; height: 20px; border-radius: 10px; overflow: hidden;
+                background: var(--surface-2); border: 1px solid var(--border); }
+        .pbar-seg { height: 100%; width: 0; transition: width 0.7s cubic-bezier(0.16,1,0.3,1); }
+        .pbar-seg.v { background: linear-gradient(90deg, #16a34a, var(--green)); }
+        .pbar-seg.r { background: linear-gradient(90deg, var(--gold), #d97706); }
+        .pbar-legend { display: flex; gap: 20px; margin: 12px 0 26px; flex-wrap: wrap; }
+        .pbar-legend span { display: inline-flex; align-items: center; gap: 7px; font-size: 12px; color: var(--muted); }
+        .ins-dot { width: 9px; height: 9px; border-radius: 50%; display: inline-block; flex-shrink: 0; }
+        .ins-dot.v { background: var(--green); }
+        .ins-dot.r { background: var(--gold); }
+
+        .section-title { font-family: 'Syne', sans-serif; font-size: 16px; font-weight: 700; margin: 6px 0 12px; }
+
+        /* Per-contributor table */
+        .tbl-wrap { overflow-x: auto; border: 1px solid var(--border); border-radius: 14px; }
+        .u-table { width: 100%; border-collapse: collapse; min-width: 560px; }
+        .u-table th, .u-table td { padding: 12px 14px; text-align: right; white-space: nowrap; }
+        .u-table th:first-child, .u-table td:first-child { text-align: left; }
+        .u-table thead th { font-size: 10px; text-transform: uppercase; letter-spacing: 0.06em;
+                            color: var(--muted); font-weight: 400; background: var(--surface-2);
+                            border-bottom: 1px solid var(--border); }
+        .u-table tbody td { font-size: 13px; color: var(--muted); border-bottom: 1px solid var(--border); }
+        .u-table tbody tr:hover td { background: var(--surface-2); }
+        .u-name { color: var(--text); }
+        .u-id { font-size: 12px; color: var(--muted); }
+        .u-num { font-family: 'Syne', sans-serif; font-weight: 700; font-size: 14px; color: var(--text); }
+        .u-pct { display: inline-flex; align-items: center; gap: 8px; justify-content: flex-end; }
+        .u-mini { width: 54px; height: 6px; border-radius: 4px; background: var(--surface-2);
+                  overflow: hidden; border: 1px solid var(--border); }
+        .u-mini i { display: block; height: 100%; background: linear-gradient(90deg, #16a34a, var(--green)); }
+        .u-table tr.total-row td { border-top: 2px solid var(--border); border-bottom: none; }
+        .u-table tr.total-row .u-name { font-weight: 700; }
+
+        .a-loading { text-align: center; color: var(--muted); font-size: 13px; padding: 40px 0; }
+        .a-note { font-size: 11px; color: var(--gold); margin-top: 4px; }
+
+        /* Admin-list management (mirrors validate.html's "Manage access") */
+        .admins-card { background: var(--surface); border: 1px solid var(--border);
+                       border-radius: 16px; padding: 22px; margin-top: 34px; }
+        .manage-row { display: flex; gap: 10px; margin-top: 6px; }
+        .manage-input {
+            flex: 1; min-width: 0; background: var(--surface-2); color: var(--text);
+            border: 1px solid var(--border); border-radius: 10px; padding: 10px 13px;
+            font-family: 'DM Mono', monospace; font-size: 13px;
+        }
+        .manage-input:focus { outline: none; border-color: var(--accent); }
+        .manage-btn {
+            flex-shrink: 0; background: var(--green-subtle); color: var(--green);
+            border: 1px solid rgba(34,197,94,0.3); border-radius: 10px; padding: 10px 16px;
+            font-family: 'Syne', sans-serif; font-weight: 700; font-size: 13px; cursor: pointer; transition: all 0.15s;
+        }
+        .manage-btn:hover { background: var(--green); color: #fff; border-color: var(--green); }
+        .manage-msg { font-size: 12px; margin: 10px 2px 0; min-height: 16px; }
+        .manage-msg.ok { color: var(--green); }
+        .manage-msg.err { color: var(--red); }
+        .admin-list { list-style: none; padding: 0; margin: 16px 0 0; display: flex; flex-direction: column; gap: 8px; }
+        .admin-item {
+            display: flex; align-items: center; justify-content: space-between; gap: 12px;
+            background: var(--surface-2); border: 1px solid var(--border); border-radius: 10px; padding: 10px 14px;
+        }
+        .admin-meta { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+        .admin-name { font-size: 13px; color: var(--text); }
+        .admin-id { font-size: 11px; color: var(--muted); }
+        .admin-you { font-size: 10px; color: var(--accent); border: 1px solid var(--accent);
+                     border-radius: 20px; padding: 1px 8px; margin-left: 8px; }
+        .admin-remove {
+            flex-shrink: 0; background: var(--red-subtle); color: var(--red);
+            border: 1px solid rgba(239,68,68,0.3); border-radius: 8px; padding: 5px 12px;
+            font-family: 'DM Mono', monospace; font-size: 12px; cursor: pointer; transition: all 0.15s;
+        }
+        .admin-remove:hover { background: var(--red); color: #fff; border-color: var(--red); }
+        .admin-remove:disabled { opacity: 0.4; cursor: not-allowed; }
+    </style>
+</head>
+<body>
+<header>
+    <div class="logo"><div class="logo-dot"></div>Admin</div>
+    <div class="nav">
+        <a href="/recordings/dashboard" class="nav-link">Dashboard</a>
+        <a href="/recordings/validate" class="nav-link">Validate</a>
+        <a href="/recordings/validate/submissions" class="nav-link">My Submissions</a>
+        <a href="/recordings/validate/admin" class="nav-link active">Admin</a>
+        <span class="user-mini"><img src="{{ user.avatar }}" alt="{{ user.username }}"></span>
+        <a href="/recordings/logout" class="logout-btn">Logout</a>
+    </div>
+</header>
+
+<main>
+    <h1 class="page-title">Dataset</h1>
+    <p class="admin-sub">Whole-dataset validation progress across every contributor. Verified = accepted by any validator; remaining = pending or flagged. Admin-only.</p>
+
+    <div id="overview"><div class="a-loading">Loading dataset stats…</div></div>
+
+    <div class="admins-card">
+        <div class="section-title">Admins</div>
+        <p class="admin-sub" style="margin-bottom:14px">Everyone listed here can open this page and manage the admin list. Add by Discord user ID.</p>
+        <div class="manage-row">
+            <input id="admin-add-id" class="manage-input" inputmode="numeric" autocomplete="off"
+                   placeholder="Discord user ID to make admin…">
+            <button id="admin-add-btn" type="button" class="manage-btn">Add admin</button>
+        </div>
+        <div id="admin-msg" class="manage-msg"></div>
+        <ul id="admin-list" class="admin-list"></ul>
+    </div>
+</main>
+
+<script>window.CURRENT_USER_ID = "{{ user.id }}";</script>
+<script src="/recordings/static/admin.js"></script>
+</body>
+</html>

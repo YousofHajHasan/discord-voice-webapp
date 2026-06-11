@@ -142,6 +142,25 @@ class AccessGrant(Base):
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
 
+class Admin(Base):
+    """
+    A Discord user with admin rights (the dataset-wide stats page + managing the
+    admin list itself). The admin gate's SOURCE OF TRUTH is this table — kept in
+    the DB, never in env/config — so admins are added/removed from the UI with no
+    redeploy. create_all() makes this table on first boot (like access_grants), so
+    no migration code is needed. Bootstrap the first admin once with a single
+    INSERT, then manage the rest from the admin page:
+        INSERT OR IGNORE INTO admins (discord_id, created_at)
+        VALUES ('<your-discord-id>', datetime('now'));
+    `created_by` is the admin who added them (NULL = bootstrapped via SQL).
+    """
+    __tablename__ = "admins"
+
+    discord_id = Column(String, primary_key=True)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    created_by = Column(String, nullable=True)
+
+
 # Columns that may be missing on an older live `chunks` table. Maps column name
 # -> the type clause used in "ALTER TABLE chunks ADD COLUMN <name> <clause>".
 _CHUNK_COLUMN_MIGRATIONS = {

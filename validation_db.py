@@ -17,9 +17,9 @@ Status model (Chunk.validation_status):
 import os
 from datetime import datetime, timezone, timedelta
 
-from sqlalchemy import or_, update, select, func, case
+from sqlalchemy import or_, and_, update, select, func, case
 from database import (
-    SessionLocal, Chunk, AccessGrant, User, _resolve_filepath,
+    SessionLocal, Chunk, AccessGrant, Admin, User, _resolve_filepath,
     measure_chunk_duration, trim_wav, RECORDINGS_PATH, VALIDATION_LEASE_MINUTES,
     LABEL_KEYS, LABEL_NORMAL_KEY,
 )
@@ -383,6 +383,139 @@ def get_insights(owner_id: str) -> dict:
         "remaining_seconds": float(r_secs or 0.0),
         "remaining_unmeasured": int(r_unmeasured or 0),
     }
+
+
+# ── Admins (DB-backed, UI-managed) ────────────────────────────────────────────
+# Source of truth for the admin gate is the `admins` table (not env/config), so
+# the list is managed from the admin page with no redeploy. Bootstrap the first
+# admin once with a single INSERT, then add the rest from the UI (see Admin in
+# database.py for the SQL). Every admin route also enforces is_admin server-side.
+
+def is_admin(discord_id: str) -> bool:
+    """True if this Discord id has admin rights (dataset stats + admin mgmt)."""
+    if not discord_id:
+        return False
+    with SessionLocal() as db:
+        return db.get(Admin, discord_id) is not None
+
+
+def list_admins() -> list:
+    """All admins for the manage panel, oldest first.
+    Each: {id, name, created_at, created_by}."""
+    with SessionLocal() as db:
+        rows = db.query(Admin).order_by(Admin.created_at.asc()).all()
+        ids = [r.discord_id for r in rows]
+        names = (
+            {u.discord_id: u.username
+             for u in db.query(User).filter(User.discord_id.in_(ids)).all()}
+            if ids else {}
+        )
+        return [
+            {"id": r.discord_id,
+             "name": names.get(r.discord_id) or r.discord_id,
+             "created_at": r.created_at.isoformat() if r.created_at else None,
+             "created_by": r.created_by}
+            for r in rows
+        ]
+
+
+def add_admin(actor_id: str, new_id: str) -> bool:
+    """Grant admin to `new_id` (idempotent). False for an empty/non-numeric id
+    (Discord ids are numeric snowflakes) so the endpoint can reject bad input."""
+    new_id = (new_id or "").strip()
+    if not new_id or not new_id.isdigit():
+        return False
+    with SessionLocal() as db:
+        if not db.get(Admin, new_id):
+            db.add(Admin(discord_id=new_id, created_by=actor_id))
+            db.commit()
+    return True
+
+
+def remove_admin(target_id: str) -> str:
+    """Revoke admin from `target_id`. Refuses to remove the LAST admin so the
+    admin area can never lock everyone out. Returns 'ok' | 'last' | 'notfound'."""
+    target_id = (target_id or "").strip()
+    with SessionLocal() as db:
+        row = db.get(Admin, target_id)
+        if not row:
+            return "notfound"
+        if db.query(Admin).count() <= 1:
+            return "last"
+        db.delete(row)
+        db.commit()
+    return "ok"
+
+
+# ── Dataset stats (admin) ─────────────────────────────────────────────────────
+
+def get_dataset_stats() -> dict:
+    """
+    Whole-dataset + per-owner validation totals for the admin page. Same shape as
+    get_insights() but across EVERY owner, computed in ONE grouped pass off the
+    (discord_id, validation_status) index — no per-request file reads.
+
+    'remaining' = pending + issue (REMAINING_STATUSES), matching Insights; rejected
+    chunks count toward neither (out of the verifiable queue). Durations in SECONDS
+    — the frontend formats minutes/hours. Owners whose chunks are all rejected/
+    deleted are omitted from `users`.
+
+    Returns:
+      {"totals": {verified_count, verified_seconds, remaining_count,
+                  remaining_seconds, remaining_unmeasured},
+       "users":  [{owner_id, name, verified_count, verified_seconds,
+                   remaining_count, remaining_seconds, remaining_unmeasured}, ...]}
+      `users` sorted by verified_seconds desc, then remaining_seconds desc.
+    """
+    verified = Chunk.validation_status == "verified"
+    remaining = Chunk.validation_status.in_(REMAINING_STATUSES)
+    dur = func.coalesce(Chunk.duration, 0.0)
+    with SessionLocal() as db:
+        rows = (
+            db.query(
+                Chunk.discord_id,
+                func.coalesce(func.sum(case((verified, 1), else_=0)), 0),
+                func.coalesce(func.sum(case((verified, dur), else_=0.0)), 0.0),
+                func.coalesce(func.sum(case((remaining, 1), else_=0)), 0),
+                func.coalesce(func.sum(case((remaining, dur), else_=0.0)), 0.0),
+                func.coalesce(
+                    func.sum(case((and_(remaining, Chunk.duration.is_(None)), 1), else_=0)), 0),
+            )
+            .filter(Chunk.is_deleted == False)
+            .group_by(Chunk.discord_id)
+            .all()
+        )
+        owner_ids = [r[0] for r in rows]
+        names = (
+            {u.discord_id: u.username
+             for u in db.query(User).filter(User.discord_id.in_(owner_ids)).all()}
+            if owner_ids else {}
+        )
+
+    users, tot = [], {
+        "verified_count": 0, "verified_seconds": 0.0,
+        "remaining_count": 0, "remaining_seconds": 0.0, "remaining_unmeasured": 0,
+    }
+    for oid, vc, vs, rc, rs, ru in rows:
+        if not (vc or rc):
+            continue  # only rejected/deleted chunks — not part of the queue
+        users.append({
+            "owner_id": oid,
+            "name": names.get(oid) or oid,
+            "verified_count": int(vc or 0),
+            "verified_seconds": float(vs or 0.0),
+            "remaining_count": int(rc or 0),
+            "remaining_seconds": float(rs or 0.0),
+            "remaining_unmeasured": int(ru or 0),
+        })
+        tot["verified_count"] += int(vc or 0)
+        tot["verified_seconds"] += float(vs or 0.0)
+        tot["remaining_count"] += int(rc or 0)
+        tot["remaining_seconds"] += float(rs or 0.0)
+        tot["remaining_unmeasured"] += int(ru or 0)
+
+    users.sort(key=lambda x: (x["verified_seconds"], x["remaining_seconds"]), reverse=True)
+    return {"totals": tot, "users": users}
 
 
 # ── Mutations ─────────────────────────────────────────────────────────────────
