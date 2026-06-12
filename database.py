@@ -1,7 +1,7 @@
 import os
 import wave
 from datetime import datetime, timedelta, timezone
-from sqlalchemy import create_engine, Column, String, Boolean, DateTime, Text, ForeignKey, UniqueConstraint, Float, inspect, text, event
+from sqlalchemy import create_engine, Column, String, Boolean, DateTime, Text, ForeignKey, UniqueConstraint, Float, Integer, inspect, text, event
 from sqlalchemy.orm import declarative_base, sessionmaker
 
 DB_PATH = os.environ.get("DB_PATH", "/app/db/recordings.db")
@@ -159,6 +159,52 @@ class Admin(Base):
     discord_id = Column(String, primary_key=True)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
     created_by = Column(String, nullable=True)
+
+
+class PayoutProfile(Base):
+    """
+    A validator's payout settings — currently just their CliQ alias (the
+    Jordanian instant-payment handle payouts are sent to). Kept SEPARATE from
+    User so the payment data is self-contained, and like access_grants/admins
+    it's a NEW table that create_all() makes on first boot (no migration needed).
+    The alias is captured on the first withdrawal and editable any time from the
+    Wallet page; each Withdrawal also SNAPSHOTS the alias it used, so editing this
+    later never rewrites a historical payout record.
+    """
+    __tablename__ = "payout_profiles"
+
+    discord_id = Column(String, primary_key=True)
+    cliq_alias = Column(String, nullable=True)
+    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+
+
+class Withdrawal(Base):
+    """
+    One payout request by a validator. Earnings themselves are computed LIVE from
+    validated audio (no ledger table); a Withdrawal is the explicit record of
+    money taken out, which is what makes the balance auditable:
+
+        available = earned - SUM(amount of the user's pending + paid withdrawals)
+
+    Flow: a validator whose available >= MIN_WITHDRAWAL_USD requests one (status
+    'pending'); an admin later approves it ('paid') or rejects it ('rejected',
+    which frees the amount back into available). At most ONE pending per user
+    (enforced in validation_db.request_withdrawal) so the balance can't be
+    double-spent by rapid clicks. amount_usd + cliq_alias are snapshotted at
+    request time, so a later rate change or alias edit never alters a past payout.
+    """
+    __tablename__ = "withdrawals"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(String, nullable=False, index=True)      # the validator being paid
+    amount_usd = Column(Float, nullable=False)                # snapshot at request time
+    seconds_snapshot = Column(Float, nullable=True)           # validated secs then (audit)
+    cliq_alias = Column(String, nullable=True)                # alias snapshot
+    status = Column(String, nullable=False, default="pending", index=True)  # pending|paid|rejected
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    decided_at = Column(DateTime, nullable=True)              # when an admin acted
+    decided_by = Column(String, nullable=True)               # admin discord_id who decided
+    note = Column(String, nullable=True)                     # optional admin note / reason
 
 
 # Columns that may be missing on an older live `chunks` table. Maps column name

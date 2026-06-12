@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Wallet · {{ user.username }}</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/recordings/static/theme.css">
+    <style>
+        .wallet-hero {
+            background: linear-gradient(135deg, var(--surface), var(--surface-2));
+            border: 1px solid var(--border); border-radius: 18px; padding: 26px 24px; margin-bottom: 16px;
+        }
+        .hero-label { font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); }
+        .hero-amount { font-family: 'Syne', sans-serif; font-weight: 800; font-size: 52px; line-height: 1.05; margin: 6px 0 4px; }
+        .hero-sub { font-size: 12.5px; color: var(--muted); }
+
+        .wallet-cards { display: flex; gap: 14px; flex-wrap: wrap; margin-bottom: 22px; }
+        .wallet-card { flex: 1 1 150px; background: var(--surface); border: 1px solid var(--border); border-radius: 14px; padding: 16px 18px; }
+        .wallet-card .num { font-family: 'Syne', sans-serif; font-weight: 800; font-size: 24px; color: var(--text); }
+        .wallet-card .lbl { font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); margin-top: 7px; }
+
+        .withdraw-row { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; margin-bottom: 10px; }
+        .withdraw-btn {
+            font-family: 'Syne', sans-serif; font-weight: 700; font-size: 15px; cursor: pointer;
+            padding: 13px 26px; border-radius: 13px; border: 1px solid var(--green);
+            background: var(--green-subtle); color: var(--green); transition: all 0.18s;
+        }
+        .withdraw-btn:hover:not(:disabled) { background: var(--green); color: #fff; box-shadow: 0 8px 26px rgba(34,197,94,0.25); }
+        .withdraw-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+        .withdraw-hint { font-size: 12px; color: var(--muted); }
+        .withdraw-hint.warn { color: var(--gold); }
+
+        .min-bar { height: 6px; background: var(--surface-2); border: 1px solid var(--border); border-radius: 6px; overflow: hidden; margin: 2px 0 24px; }
+        .min-fill { height: 100%; background: var(--gold); border-radius: 6px; transition: width 0.5s ease; }
+
+        .alias-card {
+            background: var(--surface); border: 1px solid var(--border); border-radius: 14px;
+            padding: 16px 18px; margin: 6px 0 30px;
+            display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap;
+        }
+        .alias-label { font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); }
+        .alias-value { font-size: 15px; color: var(--text); margin-top: 4px; font-family: 'DM Mono', monospace; word-break: break-all; }
+        .alias-value.empty { color: var(--muted); font-style: italic; font-family: inherit; }
+        .alias-edit {
+            flex-shrink: 0; background: none; border: 1px solid var(--border); color: var(--muted);
+            border-radius: 9px; padding: 8px 14px; font-family: 'DM Mono', monospace; font-size: 12px;
+            cursor: pointer; transition: all 0.15s;
+        }
+        .alias-edit:hover { color: var(--text); border-color: var(--border-hover); }
+
+        .section-title { font-family: 'Syne', sans-serif; font-size: 16px; font-weight: 700; margin: 6px 0 12px; }
+        .txn-wrap { overflow-x: auto; }
+        .txn-table { width: 100%; border-collapse: collapse; min-width: 460px; }
+        .txn-table th, .txn-table td { padding: 12px 6px; text-align: right; white-space: nowrap; }
+        .txn-table th:first-child, .txn-table td:first-child { text-align: left; }
+        .txn-table thead th { font-size: 10px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); font-weight: 400; border-bottom: 1px solid var(--border); }
+        .txn-table tbody td { font-size: 13px; color: var(--muted); border-bottom: 1px solid var(--border); }
+        .txn-amount { font-family: 'Syne', sans-serif; font-weight: 700; color: var(--text); }
+        .badge.paid { color: var(--green); border-color: rgba(34,197,94,0.3); background: var(--green-subtle); }
+
+        .wallet-loading { text-align: center; color: var(--muted); font-size: 13px; padding: 36px 0; }
+
+        /* Alias modal */
+        .modal { position: fixed; inset: 0; z-index: 200; display: none; align-items: center; justify-content: center; padding: 20px; background: rgba(0,0,0,0.6); backdrop-filter: blur(4px); }
+        .modal.open { display: flex; }
+        .modal-box { width: 100%; max-width: 420px; background: var(--surface); border: 1px solid var(--border); border-radius: 16px; padding: 24px; }
+        .modal-box h3 { font-family: 'Syne', sans-serif; font-size: 19px; margin-bottom: 6px; }
+        .modal-box p { font-size: 12.5px; color: var(--muted); margin-bottom: 16px; line-height: 1.5; }
+        .modal-input { width: 100%; background: var(--surface-2); color: var(--text); border: 1px solid var(--border); border-radius: 10px; padding: 12px 13px; font-family: 'DM Mono', monospace; font-size: 14px; }
+        .modal-input:focus { outline: none; border-color: var(--accent); }
+        .modal-msg { font-size: 12px; color: var(--red); min-height: 15px; margin-top: 8px; }
+        .modal-actions { display: flex; gap: 10px; margin-top: 12px; justify-content: flex-end; }
+        .modal-btn { font-family: 'Syne', sans-serif; font-weight: 700; font-size: 13px; cursor: pointer; padding: 10px 18px; border-radius: 10px; border: 1px solid var(--border); background: var(--surface-2); color: var(--text); transition: all 0.15s; }
+        .modal-btn.primary { border-color: var(--green); background: var(--green-subtle); color: var(--green); }
+        .modal-btn.primary:hover { background: var(--green); color: #fff; }
+        .modal-btn.ghost:hover { border-color: var(--border-hover); }
+    </style>
+</head>
+<body>
+<header>
+    <div class="logo"><div class="logo-dot"></div>Wallet</div>
+    <div class="nav">
+        <a href="/recordings/dashboard" class="nav-link">Dashboard</a>
+        <a href="/recordings/validate" class="nav-link">Validate</a>
+        <a href="/recordings/validate/submissions" class="nav-link">My Submissions</a>
+        <a href="/recordings/validate/wallet" class="nav-link active">Wallet</a>
+        {% if is_admin %}<a href="/recordings/validate/admin" class="nav-link">Admin</a>{% endif %}
+        <span class="user-mini"><img src="{{ user.avatar }}" alt="{{ user.username }}"></span>
+        <a href="/recordings/logout" class="logout-btn">Logout</a>
+    </div>
+</header>
+
+<main>
+    <h1 class="page-title">Wallet</h1>
+    <p class="page-subtitle">You're paid for the audio you validate. Withdraw once you reach the minimum — an admin confirms each payout to your CliQ alias.</p>
+
+    <div id="wallet"><div class="wallet-loading">Loading your wallet…</div></div>
+</main>
+
+<div class="modal" id="alias-modal">
+    <div class="modal-box">
+        <h3 id="alias-modal-title">Add your CliQ alias</h3>
+        <p>Payouts are sent to your CliQ alias — your Jordanian instant-payment handle. You can change it any time.</p>
+        <input id="alias-input" class="modal-input" inputmode="text" autocomplete="off" placeholder="e.g. yourname or 07xxxxxxxx">
+        <div id="alias-modal-msg" class="modal-msg"></div>
+        <div class="modal-actions">
+            <button class="modal-btn ghost" id="alias-cancel">Cancel</button>
+            <button class="modal-btn primary" id="alias-save">Save</button>
+        </div>
+    </div>
+</div>
+
+<script>window.CURRENT_USER_ID = "{{ user.id }}";</script>
+<script src="/recordings/static/wallet.js"></script>
+</body>
+</html>

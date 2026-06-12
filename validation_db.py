@@ -19,14 +19,30 @@ from datetime import datetime, timezone, timedelta
 
 from sqlalchemy import or_, and_, update, select, func, case
 from database import (
-    SessionLocal, Chunk, AccessGrant, Admin, User, _resolve_filepath,
-    measure_chunk_duration, trim_wav, RECORDINGS_PATH, VALIDATION_LEASE_MINUTES,
-    LABEL_KEYS, LABEL_NORMAL_KEY,
+    SessionLocal, Chunk, AccessGrant, Admin, User, Withdrawal, PayoutProfile,
+    _resolve_filepath, measure_chunk_duration, trim_wav, RECORDINGS_PATH,
+    VALIDATION_LEASE_MINUTES, LABEL_KEYS, LABEL_NORMAL_KEY,
 )
 
 # Statuses that count as "still to validate" for the Insights remaining total.
 # issue is included on purpose (flagged-but-not-finished work — see get_insights).
 REMAINING_STATUSES = ["pending", "issue"]
+
+# ── Payouts / earnings ────────────────────────────────────────────────────────
+# Validators are paid for the AUDIO THEY VALIDATED — every decision counts
+# (accept, reject, AND issue are all real listening work). ONE global rate,
+# env-tunable: PAY_USD per PAY_HOURS hours of validated audio ($70 / 30h default).
+# Earnings are computed live (see get_wallet); a Withdrawal row is the only thing
+# persisted. Money is in USD, rounded to cents at the edges.
+PAY_USD = float(os.environ.get("PAY_USD", "70"))
+PAY_HOURS = float(os.environ.get("PAY_HOURS", "30"))
+PAY_RATE_PER_SEC = (PAY_USD / (PAY_HOURS * 3600.0)) if PAY_HOURS > 0 else 0.0
+MIN_WITHDRAWAL_USD = float(os.environ.get("MIN_WITHDRAWAL_USD", "5"))
+
+# Decisions that count as completed validation work toward earnings.
+PAID_STATUSES = ["verified", "rejected", "issue"]
+# Withdrawal statuses whose amount is "spent" (subtracted from available).
+SPENT_WITHDRAWAL_STATUSES = ["pending", "paid"]
 
 # ── Content-classification taxonomy ───────────────────────────────────────────
 # Single source of truth for the validator's label chips: key (== DB column ==
@@ -704,3 +720,230 @@ def resolve_chunk_file(viewer_id: str, owner_id: str, date: str, filename: str):
         if not row or row.is_deleted:
             return None
         return _resolve_filepath(row)
+
+
+# ── Wallet / earnings / withdrawals ───────────────────────────────────────────
+# Earnings are NEVER stored — they're a pure function of the audio the user has
+# validated (validated_by == them, any decision) times the global rate. The only
+# persisted state is the `withdrawals` ledger and the user's CliQ alias. This
+# keeps the number always-correct (re-decides, trims, etc. flow straight through)
+# while withdrawn amounts stay LOCKED, so money already requested/paid can never
+# be clawed back by a later edit — `available` just floors at 0.
+
+def _validated_seconds(db, user_id: str) -> float:
+    """Total audio seconds this user has validated (any decision counts)."""
+    secs = (
+        db.query(func.coalesce(func.sum(func.coalesce(Chunk.duration, 0.0)), 0.0))
+        .filter(
+            Chunk.validated_by == user_id,
+            Chunk.is_deleted == False,
+            Chunk.validation_status.in_(PAID_STATUSES),
+        )
+        .scalar()
+    )
+    return float(secs or 0.0)
+
+
+def _withdrawn_usd(db, user_id: str) -> float:
+    """Dollars locked by the user's pending + paid withdrawals (rejected frees up)."""
+    amt = (
+        db.query(func.coalesce(func.sum(Withdrawal.amount_usd), 0.0))
+        .filter(
+            Withdrawal.user_id == user_id,
+            Withdrawal.status.in_(SPENT_WITHDRAWAL_STATUSES),
+        )
+        .scalar()
+    )
+    return float(amt or 0.0)
+
+
+def _serialize_withdrawal(w) -> dict:
+    return {
+        "id": w.id,
+        "amount_usd": round(float(w.amount_usd or 0.0), 2),
+        "status": w.status or "pending",
+        "cliq_alias": w.cliq_alias,
+        "created_at": w.created_at.isoformat() if w.created_at else None,
+        "decided_at": w.decided_at.isoformat() if w.decided_at else None,
+        "note": w.note,
+    }
+
+
+def get_wallet(user_id: str) -> dict:
+    """
+    The validator's full wallet: live earnings, what's been withdrawn, what's
+    available now, the CliQ alias on file, and their withdrawal history. All money
+    in USD rounded to cents; durations in seconds (the frontend formats them).
+    """
+    with SessionLocal() as db:
+        secs = _validated_seconds(db, user_id)
+        withdrawn = _withdrawn_usd(db, user_id)
+        paid = (
+            db.query(func.coalesce(func.sum(Withdrawal.amount_usd), 0.0))
+            .filter(Withdrawal.user_id == user_id, Withdrawal.status == "paid")
+            .scalar()
+        )
+        pending = (
+            db.query(Withdrawal)
+            .filter(Withdrawal.user_id == user_id, Withdrawal.status == "pending")
+            .first()
+        )
+        txns = (
+            db.query(Withdrawal)
+            .filter(Withdrawal.user_id == user_id)
+            .order_by(Withdrawal.created_at.desc())
+            .all()
+        )
+        profile = db.get(PayoutProfile, user_id)
+        alias = profile.cliq_alias if profile else None
+
+    earned = round(secs * PAY_RATE_PER_SEC, 2)
+    available = round(max(0.0, earned - withdrawn), 2)
+    return {
+        "validated_seconds": secs,
+        "earned_usd": earned,
+        "withdrawn_usd": round(withdrawn, 2),
+        "paid_usd": round(float(paid or 0.0), 2),
+        "available_usd": available,
+        "min_withdrawal_usd": round(MIN_WITHDRAWAL_USD, 2),
+        "has_pending": pending is not None,
+        "can_withdraw": available >= MIN_WITHDRAWAL_USD and pending is None,
+        "cliq_alias": alias,
+        "rate_usd": PAY_USD,
+        "rate_hours": PAY_HOURS,
+        "transactions": [_serialize_withdrawal(w) for w in txns],
+    }
+
+
+def _clean_alias(alias):
+    """Normalize a CliQ alias, or None if unusable. Permissive (handles are short
+    alphanumerics, phone numbers, or IBANs) — just trim, cap length, no controls."""
+    alias = (alias or "").strip()
+    if not alias or len(alias) > 64:
+        return None
+    if any(ord(c) < 32 for c in alias):
+        return None
+    return alias
+
+
+def set_cliq_alias(user_id: str, alias) -> str | None:
+    """Set/update the user's CliQ alias. Returns the cleaned value, or None if
+    the input was invalid (the endpoint maps that to HTTP 400)."""
+    clean = _clean_alias(alias)
+    if clean is None:
+        return None
+    with SessionLocal() as db:
+        p = db.get(PayoutProfile, user_id)
+        if p is None:
+            db.add(PayoutProfile(discord_id=user_id, cliq_alias=clean))
+        else:
+            p.cliq_alias = clean
+            p.updated_at = datetime.now(timezone.utc)
+        db.commit()
+    return clean
+
+
+def request_withdrawal(user_id: str):
+    """
+    Create a pending withdrawal for the user's FULL available balance. Returns
+    (result, wallet):
+      "ok"          — created
+      "no_alias"    — no CliQ alias on file (client should collect it, then retry)
+      "below_min"   — available < MIN_WITHDRAWAL_USD
+      "has_pending" — a pending withdrawal already exists (one at a time)
+    The amount + alias are snapshotted onto the row at creation time.
+    """
+    result = "ok"
+    with SessionLocal() as db:
+        has_pending = db.query(Withdrawal).filter(
+            Withdrawal.user_id == user_id, Withdrawal.status == "pending"
+        ).first() is not None
+        secs = _validated_seconds(db, user_id)
+        withdrawn = _withdrawn_usd(db, user_id)
+        earned = round(secs * PAY_RATE_PER_SEC, 2)
+        available = round(max(0.0, earned - withdrawn), 2)
+        profile = db.get(PayoutProfile, user_id)
+        alias = profile.cliq_alias if profile else None
+
+        # Order matters: a pending request and the minimum are hard blocks, so
+        # report those before asking for an alias (no point collecting one if they
+        # can't withdraw yet). The alias prompt is for an eligible first-timer.
+        if has_pending:
+            result = "has_pending"
+        elif available < MIN_WITHDRAWAL_USD:
+            result = "below_min"
+        elif not alias:
+            result = "no_alias"
+        else:
+            db.add(Withdrawal(
+                user_id=user_id, amount_usd=available, seconds_snapshot=secs,
+                cliq_alias=alias, status="pending",
+            ))
+            db.commit()
+    return result, get_wallet(user_id)
+
+
+# ── Admin: payout approval ────────────────────────────────────────────────────
+
+def list_payouts(history_limit: int = 50) -> dict:
+    """
+    For the admin Payouts panel: every PENDING withdrawal (oldest first — act on
+    these) plus recent decided ones (history). Each row carries the validator's
+    display name and the alias to pay.
+    """
+    with SessionLocal() as db:
+        pending = (
+            db.query(Withdrawal).filter(Withdrawal.status == "pending")
+            .order_by(Withdrawal.created_at.asc()).all()
+        )
+        history = (
+            db.query(Withdrawal).filter(Withdrawal.status != "pending")
+            .order_by(Withdrawal.decided_at.desc()).limit(history_limit).all()
+        )
+        ids = {w.user_id for w in pending} | {w.user_id for w in history}
+        names = (
+            {u.discord_id: u.username
+             for u in db.query(User).filter(User.discord_id.in_(ids)).all()}
+            if ids else {}
+        )
+
+    def _row(w):
+        d = _serialize_withdrawal(w)
+        d["user_id"] = w.user_id
+        d["user_name"] = names.get(w.user_id) or w.user_id
+        d["decided_by"] = w.decided_by
+        return d
+
+    return {
+        "pending": [_row(w) for w in pending],
+        "history": [_row(w) for w in history],
+        "pending_total_usd": round(sum(float(w.amount_usd or 0.0) for w in pending), 2),
+    }
+
+
+def _decide_payout(admin_id: str, withdrawal_id: int, new_status: str, note=None) -> str:
+    """Flip a pending withdrawal to paid/rejected. Returns 'ok' | 'notfound' |
+    'notpending' (already decided — lets the admin UI skip a double action)."""
+    with SessionLocal() as db:
+        w = db.get(Withdrawal, withdrawal_id)
+        if not w:
+            return "notfound"
+        if (w.status or "pending") != "pending":
+            return "notpending"
+        w.status = new_status
+        w.decided_at = datetime.now(timezone.utc)
+        w.decided_by = admin_id
+        if note is not None:
+            w.note = note
+        db.commit()
+    return "ok"
+
+
+def approve_payout(admin_id: str, withdrawal_id: int) -> str:
+    """Mark a pending withdrawal paid (after the admin has actually sent the money)."""
+    return _decide_payout(admin_id, withdrawal_id, "paid")
+
+
+def reject_payout(admin_id: str, withdrawal_id: int, note=None) -> str:
+    """Reject a pending withdrawal — its amount returns to the user's available."""
+    return _decide_payout(admin_id, withdrawal_id, "rejected", note=note)

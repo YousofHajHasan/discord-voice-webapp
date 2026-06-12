@@ -11,6 +11,7 @@ const addIdEl    = document.getElementById('admin-add-id');
 const addBtnEl   = document.getElementById('admin-add-btn');
 const msgEl      = document.getElementById('admin-msg');
 const listEl     = document.getElementById('admin-list');
+const payoutsEl  = document.getElementById('payouts');
 
 function esc(s) {
   return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;')
@@ -24,6 +25,17 @@ function fmtDur(seconds) {
   if (s < 100) return `${Math.round(s)}s`;
   if (s < 6000) return `${Math.round(s / 60)}m`;
   return `${Math.round(s / 3600)}h`;
+}
+
+function fmtUsd(n) { return '$' + (Number(n) || 0).toFixed(2); }
+
+// Stored timestamps are naive UTC ISO — treat as UTC, render in local time.
+function fmtDate(iso) {
+  if (!iso) return '—';
+  const d = new Date(/[zZ]|[+-]\d\d:?\d\d$/.test(iso) ? iso : iso + 'Z');
+  if (isNaN(d)) return '—';
+  const p = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
 }
 
 // Completion fraction by audio TIME once anything is measured, else by chunk
@@ -179,5 +191,64 @@ function showMsg(msg, ok) {
 addBtnEl.onclick = addAdmin;
 addIdEl.onkeydown = (e) => { if (e.key === 'Enter') addAdmin(); };
 
+// ── Payouts (pending withdrawals to approve/reject + recent history) ─────────
+function statusWord(s) { return s === 'paid' ? 'Paid' : s === 'rejected' ? 'Rejected' : 'Pending'; }
+
+function renderPayouts(d) {
+  const pending = d.pending || [];
+  const history = d.history || [];
+  let html = '';
+
+  if (!pending.length) {
+    html += `<div class="a-loading" style="padding:14px 0">No pending withdrawals.</div>`;
+  } else {
+    if (d.pending_total_usd) {
+      html += `<div class="pending-sum">${fmtUsd(d.pending_total_usd)} across ${pending.length} request${pending.length === 1 ? '' : 's'}</div>`;
+    }
+    html += `<ul class="admin-list">` + pending.map((p) => `
+      <li class="admin-item">
+        <div class="admin-meta">
+          <span class="admin-name">${esc(p.user_name)} · <span class="payout-amount">${fmtUsd(p.amount_usd)}</span></span>
+          <span class="admin-id">CliQ ${p.cliq_alias ? esc(p.cliq_alias) : '—'} · requested ${fmtDate(p.created_at)}</span>
+        </div>
+        <div class="payout-actions">
+          <button class="manage-btn" data-approve="${p.id}">Approve</button>
+          <button class="admin-remove" data-reject="${p.id}">Reject</button>
+        </div>
+      </li>`).join('') + `</ul>`;
+  }
+
+  if (history.length) {
+    html += `<div class="section-title" style="font-size:13px;margin:20px 0 10px">Recent</div>`;
+    html += `<ul class="admin-list">` + history.map((h) => `
+      <li class="admin-item">
+        <div class="admin-meta">
+          <span class="admin-name">${esc(h.user_name)} · ${fmtUsd(h.amount_usd)}</span>
+          <span class="admin-id">${h.decided_at ? fmtDate(h.decided_at) : ''}${h.cliq_alias ? ' · CliQ ' + esc(h.cliq_alias) : ''}${h.note ? ' · ' + esc(h.note) : ''}</span>
+        </div>
+        <span class="badge ${h.status === 'paid' ? 'paid' : esc(h.status)}">${statusWord(h.status)}</span>
+      </li>`).join('') + `</ul>`;
+  }
+
+  payoutsEl.innerHTML = html;
+  payoutsEl.querySelectorAll('[data-approve]').forEach((b) => { b.onclick = () => decidePayout('approve', b.dataset.approve); });
+  payoutsEl.querySelectorAll('[data-reject]').forEach((b) => { b.onclick = () => decidePayout('reject', b.dataset.reject); });
+}
+
+async function loadPayouts() {
+  try { renderPayouts(await getJSON(API + '/admin/payouts')); }
+  catch (e) { payoutsEl.innerHTML = `<div class="a-loading">Couldn't load payouts. Reload to retry.</div>`; }
+}
+
+async function decidePayout(action, id) {
+  if (action === 'approve' && !confirm("Mark this withdrawal as PAID? Do this only after you've sent the money via CliQ.")) return;
+  if (action === 'reject'  && !confirm("Reject this withdrawal? The amount returns to the user's available balance.")) return;
+  const url = API + (action === 'approve' ? '/admin/payouts/approve' : '/admin/payouts/reject');
+  const { ok, json } = await postJSON(url, { id: Number(id) });
+  if (!ok) { alert(json.detail || 'Could not update the withdrawal.'); }
+  loadPayouts();
+}
+
 loadOverview();
 loadAdmins();
+loadPayouts();

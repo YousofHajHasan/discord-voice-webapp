@@ -176,6 +176,88 @@ def seed_decisions():
     print("[dev] seeded sample decisions (accepted/issue/rejected) for the insights + submissions demo")
 
 
+def seed_wallet_demo():
+    """
+    Make the Wallet + admin Payouts flows testable locally WITHOUT real prod-scale
+    audio. Idempotent (skips once any withdrawal exists). Sets up:
+      - localdev : > $5 available, NO CliQ alias, no withdrawals, and is an ADMIN
+                   -> test the first-time alias prompt + creating a withdrawal,
+                      then approving payouts from the admin Payouts panel.
+      - teammate : > $5 earned, alias set, one PAID (history) + one PENDING
+                   withdrawal -> test admin Approve/Reject and the Paid history.
+      - alice    : < $5, no alias -> test the disabled "reach $5" state.
+
+    Balances come from deciding a few chunks per validator and then writing
+    FABRICATED durations (the seed wavs are only seconds long), so the dollar
+    amounts use the REAL $70/30h rate. dev-only fixture; dev.db is gitignored.
+    """
+    import validation_db as vdb
+    from database import SessionLocal, Chunk, Admin, Withdrawal
+
+    rate = vdb.PAY_RATE_PER_SEC or (70.0 / (30 * 3600))
+
+    with SessionLocal() as db:
+        if db.query(Withdrawal).first():
+            return  # already seeded — leave as-is
+
+    # localdev is the admin in dev so the Admin page + Payouts panel are reachable.
+    with SessionLocal() as db:
+        if not db.get(Admin, DEV_USER_ID):
+            db.add(Admin(discord_id=DEV_USER_ID))
+            db.commit()
+
+    def _accept_as(validator, owner, n):
+        """Accept up to n of `owner`'s still-pending chunks as `validator`."""
+        with SessionLocal() as db:
+            rows = (db.query(Chunk)
+                    .filter(Chunk.discord_id == owner,
+                            Chunk.validation_status == "pending",
+                            Chunk.is_deleted == False)
+                    .order_by(Chunk.date.asc(), Chunk.filename.asc())
+                    .limit(n).all())
+            pend = [(r.discord_id, r.date, r.filename) for r in rows]
+        for c in pend:
+            vdb.accept_chunk(validator, *c, "seeded for wallet demo", {"label_normal": True})
+
+    # teammate validates some of localdev's voices; alice validates her own.
+    _accept_as(TEAMMATE_ID, DEV_USER_ID, 5)
+    _accept_as(ALICE_ID, ALICE_ID, 3)
+
+    def _set_earned(validator, target_usd):
+        """Fabricate durations on this validator's decided chunks to ~target_usd."""
+        target_secs = target_usd / rate
+        with SessionLocal() as db:
+            rows = (db.query(Chunk)
+                    .filter(Chunk.validated_by == validator,
+                            Chunk.is_deleted == False,
+                            Chunk.validation_status.in_(vdb.PAID_STATUSES))
+                    .all())
+            if not rows:
+                return
+            per = target_secs / len(rows)
+            for r in rows:
+                r.duration = per
+            db.commit()
+
+    _set_earned(DEV_USER_ID, 8.0)    # localdev: ~$8 available, no alias, no withdrawals
+    _set_earned(TEAMMATE_ID, 12.0)   # teammate: ~$12 earned; $10 locked below -> ~$2 available
+    _set_earned(ALICE_ID, 2.0)       # alice: ~$2, below the $5 minimum
+
+    # teammate's payout history: one already PAID + one still PENDING to approve.
+    vdb.set_cliq_alias(TEAMMATE_ID, "teammate.cliq")
+    now = datetime.now(timezone.utc)
+    with SessionLocal() as db:
+        db.add(Withdrawal(user_id=TEAMMATE_ID, amount_usd=5.0, seconds_snapshot=5.0 / rate,
+                          cliq_alias="teammate.cliq", status="paid",
+                          created_at=now - timedelta(days=3),
+                          decided_at=now - timedelta(days=2), decided_by=DEV_USER_ID))
+        db.add(Withdrawal(user_id=TEAMMATE_ID, amount_usd=5.0, seconds_snapshot=5.0 / rate,
+                          cliq_alias="teammate.cliq", status="pending",
+                          created_at=now - timedelta(hours=2)))
+        db.commit()
+    print("[dev] seeded wallet demo: localdev ~$8 (no alias, admin), teammate ~$12 (1 paid + 1 pending), alice ~$2 (below min)")
+
+
 def _setup_app():
     """Wire the dev bypass + seed data, return the FastAPI app (no server start)."""
     # Safety: never let the login-bypass run against the production volumes.
@@ -199,6 +281,7 @@ def _setup_app():
     init_db()
     seed_users_and_grants()
     seed_decisions()
+    seed_wallet_demo()
 
     default_user = {"id": DEV_USER_ID, "username": DEV_USERNAME, "avatar": DEV_AVATAR}
 
@@ -249,6 +332,10 @@ def main():
     print("     As localdev the dropdown also shows 'alice' (she granted you access).")
     print(f"  ── Insights: {base}/validate/submissions  →  '📊 Insights' button")
     print("     (sample decisions are pre-seeded so verified + remaining show real numbers).")
+    print(f"  ── Wallet  : {base}/validate/wallet")
+    print(f"     as {DEV_USERNAME}: ~$8 available, NO alias -> Withdraw asks for the CliQ alias,")
+    print("       then creates a pending request you can approve as admin.")
+    print(f"     Admin Payouts: {base}/validate/admin  (teammate has a pending request to approve/reject).")
     print("=" * 66 + "\n")
 
     import uvicorn

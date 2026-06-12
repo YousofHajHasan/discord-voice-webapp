@@ -106,6 +106,20 @@ async def admin_page(request: Request):
     )
 
 
+@router.get("/validate/wallet", response_class=HTMLResponse)
+async def wallet_page(request: Request):
+    """The validator's earnings + withdrawal page. Any logged-in user; every
+    number comes from /validate/api/wallet, and admins approve the payouts from
+    the separate admin page."""
+    user = get_current_user(request)
+    if not user:
+        return RedirectResponse("/recordings/")
+    return templates.TemplateResponse(
+        "wallet.html",
+        {"request": request, "user": user, "is_admin": vdb.is_admin(user["id"])},
+    )
+
+
 # ── JSON API ──────────────────────────────────────────────────────────────────
 
 @router.get("/validate/api/queue")
@@ -206,6 +220,48 @@ async def api_labels(request: Request):
     return {"labels": vdb.LABELS}
 
 
+# ── Wallet / earnings / withdrawals ───────────────────────────────────────────
+
+@router.get("/validate/api/wallet")
+async def api_wallet(request: Request):
+    """Live earnings, available balance, CliQ alias, and withdrawal history for the
+    logged-in validator — computed from the audio they personally validated."""
+    user = _require_user(request)
+    return vdb.get_wallet(user["id"])
+
+
+@router.post("/validate/api/wallet/alias")
+async def api_wallet_alias(request: Request):
+    """Set / update the viewer's CliQ payout alias (captured on the first
+    withdrawal, editable any time from the Wallet page)."""
+    user = _require_user(request)
+    body = await request.json()
+    alias = vdb.set_cliq_alias(user["id"], str(body.get("cliq_alias", "")))
+    if alias is None:
+        raise HTTPException(status_code=400, detail="Enter a valid CliQ alias.")
+    return {"ok": True, "cliq_alias": alias, "wallet": vdb.get_wallet(user["id"])}
+
+
+@router.post("/validate/api/wallet/withdraw")
+async def api_wallet_withdraw(request: Request):
+    """Request a payout of the full available balance. A 428 means 'set your CliQ
+    alias first' so the client can prompt for it and retry."""
+    user = _require_user(request)
+    result, wallet = vdb.request_withdrawal(user["id"])
+    if result == "ok":
+        return JSONResponse({"ok": True, "wallet": wallet})
+    if result == "no_alias":
+        raise HTTPException(status_code=428, detail="Add your CliQ alias to withdraw.")
+    if result == "below_min":
+        raise HTTPException(
+            status_code=400,
+            detail=f"You need at least ${wallet['min_withdrawal_usd']:.2f} available to withdraw.",
+        )
+    if result == "has_pending":
+        raise HTTPException(status_code=409, detail="You already have a withdrawal awaiting approval.")
+    raise HTTPException(status_code=400, detail="Could not create the withdrawal.")
+
+
 # ── Admin: dataset stats + admin-list management ──────────────────────────────
 # Every route here is gated by _require_admin (403 for non-admins); the
 # template-level hiding of the Admin button/nav is only cosmetic.
@@ -244,6 +300,51 @@ async def api_admin_remove(request: Request):
     if result == "notfound":
         raise HTTPException(status_code=404, detail="That user isn't an admin.")
     return {"ok": True, "admins": vdb.list_admins()}
+
+
+# ── Admin: payout approval ────────────────────────────────────────────────────
+# Same _require_admin gate as the stats/admin-list routes. The user-facing wallet
+# only CREATES pending withdrawals; flipping them to paid/rejected happens here.
+
+@router.get("/validate/api/admin/payouts")
+async def api_admin_payouts(request: Request):
+    """Pending withdrawals to act on, plus recent decided ones (history)."""
+    _require_admin(request)
+    return vdb.list_payouts()
+
+
+def _withdrawal_id(body) -> int:
+    try:
+        return int(body.get("id"))
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="Invalid withdrawal id")
+
+
+def _payout_result(result: str):
+    if result == "ok":
+        return JSONResponse({"ok": True})
+    if result == "notfound":
+        raise HTTPException(status_code=404, detail="Withdrawal not found.")
+    if result == "notpending":
+        raise HTTPException(status_code=409, detail="That withdrawal was already decided.")
+    raise HTTPException(status_code=400, detail="Could not update the withdrawal.")
+
+
+@router.post("/validate/api/admin/payouts/approve")
+async def api_admin_payout_approve(request: Request):
+    """Mark a pending withdrawal PAID — do this after actually sending the money."""
+    admin = _require_admin(request)
+    body = await request.json()
+    return _payout_result(vdb.approve_payout(admin["id"], _withdrawal_id(body)))
+
+
+@router.post("/validate/api/admin/payouts/reject")
+async def api_admin_payout_reject(request: Request):
+    """Reject a pending withdrawal; its amount returns to the user's available."""
+    admin = _require_admin(request)
+    body = await request.json()
+    note = str(body.get("note", "")).strip() or None
+    return _payout_result(vdb.reject_payout(admin["id"], _withdrawal_id(body), note))
 
 
 def _decide_response(result: str, ok_status: str):

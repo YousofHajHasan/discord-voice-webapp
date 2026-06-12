@@ -17,6 +17,7 @@ from database import (
     release_stale_validation_claims, backfill_durations,
 )
 from validate import router as validate_router
+import validation_db as vdb
 
 logging.basicConfig(
     level=logging.INFO,
@@ -190,6 +191,7 @@ async def dashboard(request: Request):
         "request": request,
         "user": user,
         "chunks_per_date": chunks_per_date,
+        "is_admin": vdb.is_admin(user["id"]),
     })
 
 
