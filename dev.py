@@ -189,12 +189,12 @@ def seed_wallet_demo():
 
     Balances come from deciding a few chunks per validator and then writing
     FABRICATED durations (the seed wavs are only seconds long), so the dollar
-    amounts use the REAL $70/30h rate. dev-only fixture; dev.db is gitignored.
+    amounts use the REAL $3/hour rate. dev-only fixture; dev.db is gitignored.
     """
     import validation_db as vdb
     from database import SessionLocal, Chunk, Admin, Withdrawal
 
-    rate = vdb.PAY_RATE_PER_SEC or (70.0 / (30 * 3600))
+    rate = vdb.PAY_RATE_PER_SEC or (3.0 / 3600)
 
     with SessionLocal() as db:
         if db.query(Withdrawal).first():

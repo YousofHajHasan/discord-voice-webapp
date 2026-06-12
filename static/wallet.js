@@ -23,7 +23,6 @@ const esc = (s) => String(s).replace(/[&<>"']/g, (c) =>
   ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
 function fmtUsd(n) { return '$' + (Number(n) || 0).toFixed(2); }
-function fmtHours(h) { const n = Number(h) || 0; return Number.isInteger(n) ? String(n) : n.toFixed(1); }
 
 // Magnitude-driven single-unit duration (mirrors the Insights / admin views).
 function fmtDur(seconds) {
@@ -109,7 +108,7 @@ function render() {
     <div class="wallet-hero">
       <div class="hero-label">Available to withdraw</div>
       <div class="hero-amount">${fmtUsd(avail)}</div>
-      <div class="hero-sub">Rate ${fmtUsd(w.rate_usd)} / ${fmtHours(w.rate_hours)}h of validated audio · ${fmtDur(w.validated_seconds)} validated so far</div>
+      <div class="hero-sub">Rate ${fmtUsd(w.rate_per_hour)} / hour of validated audio · ${fmtDur(w.validated_seconds)} validated so far</div>
     </div>
 
     <div class="wallet-cards">

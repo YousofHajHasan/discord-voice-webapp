@@ -31,12 +31,11 @@ REMAINING_STATUSES = ["pending", "issue"]
 # ── Payouts / earnings ────────────────────────────────────────────────────────
 # Validators are paid for the AUDIO THEY VALIDATED — every decision counts
 # (accept, reject, AND issue are all real listening work). ONE global rate,
-# env-tunable: PAY_USD per PAY_HOURS hours of validated audio ($70 / 30h default).
+# env-tunable: PAY_PER_HOUR USD per hour of validated audio ($3 / hour default).
 # Earnings are computed live (see get_wallet); a Withdrawal row is the only thing
 # persisted. Money is in USD, rounded to cents at the edges.
-PAY_USD = float(os.environ.get("PAY_USD", "70"))
-PAY_HOURS = float(os.environ.get("PAY_HOURS", "30"))
-PAY_RATE_PER_SEC = (PAY_USD / (PAY_HOURS * 3600.0)) if PAY_HOURS > 0 else 0.0
+PAY_PER_HOUR = float(os.environ.get("PAY_PER_HOUR", "3"))
+PAY_RATE_PER_SEC = PAY_PER_HOUR / 3600.0
 MIN_WITHDRAWAL_USD = float(os.environ.get("MIN_WITHDRAWAL_USD", "5"))
 
 # Decisions that count as completed validation work toward earnings.
@@ -809,8 +808,7 @@ def get_wallet(user_id: str) -> dict:
         "has_pending": pending is not None,
         "can_withdraw": available >= MIN_WITHDRAWAL_USD and pending is None,
         "cliq_alias": alias,
-        "rate_usd": PAY_USD,
-        "rate_hours": PAY_HOURS,
+        "rate_per_hour": PAY_PER_HOUR,
         "transactions": [_serialize_withdrawal(w) for w in txns],
     }
 
