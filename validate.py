@@ -122,6 +122,20 @@ async def wallet_page(request: Request):
     )
 
 
+@router.get("/validate/leaderboard", response_class=HTMLResponse)
+async def leaderboard_page(request: Request):
+    """Validator competition board. Any logged-in user can open the page; the data
+    itself is gated server-side to users who've verified at least one clip (see
+    /validate/api/leaderboard) — others see an 'unlock by validating' state."""
+    user = get_current_user(request)
+    if not user:
+        return RedirectResponse("/recordings/")
+    return templates.TemplateResponse(
+        "leaderboard.html",
+        {"request": request, "user": user, "is_admin": vdb.is_admin(user["id"])},
+    )
+
+
 # ── JSON API ──────────────────────────────────────────────────────────────────
 
 @router.get("/validate/api/queue")
@@ -262,6 +276,20 @@ async def api_wallet_withdraw(request: Request):
     if result == "has_pending":
         raise HTTPException(status_code=409, detail="You already have a withdrawal awaiting approval.")
     raise HTTPException(status_code=400, detail="Could not create the withdrawal.")
+
+
+@router.get("/validate/api/leaderboard")
+async def api_leaderboard(request: Request):
+    """Ranked validators for a time window (today|week|month|all). Gated to users
+    who've validated at least one clip (any decision) — others get {eligible:false}
+    with no data, so a logged-in stranger can't see everyone's stats."""
+    user = _require_user(request)
+    window = request.query_params.get("window", "today")
+    if not vdb.has_validated(user["id"]):
+        return {"eligible": False, "window": window}
+    data = vdb.get_leaderboard(window, user["id"])
+    data["eligible"] = True
+    return data
 
 
 # ── Admin: dataset stats + admin-list management ──────────────────────────────

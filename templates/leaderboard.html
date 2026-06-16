@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Leaderboard · {{ user.username }}</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/recordings/static/theme.css">
+    <style>
+        .lb-sub { font-size: 12.5px; color: var(--muted); margin-bottom: 20px; }
+
+        /* Window tabs */
+        .lb-tabs { display: inline-flex; gap: 4px; background: var(--surface-2); border: 1px solid var(--border);
+                   border-radius: 12px; padding: 4px; margin-bottom: 22px; flex-wrap: wrap; }
+        .lb-tab { border: none; background: none; color: var(--muted); font-family: 'Syne', sans-serif; font-weight: 700;
+                  font-size: 13px; padding: 8px 16px; border-radius: 9px; cursor: pointer; transition: all 0.15s; }
+        .lb-tab:hover { color: var(--text); }
+        .lb-tab.active { background: var(--accent-subtle); color: var(--text); box-shadow: inset 0 0 0 1px var(--accent); }
+
+        /* Group total */
+        .lb-total { background: linear-gradient(135deg, var(--surface), var(--surface-2)); border: 1px solid var(--border);
+                    border-radius: 14px; padding: 14px 18px; margin-bottom: 22px; font-size: 13px; color: var(--muted); }
+        .lb-total b { font-family: 'Syne', sans-serif; color: var(--text); font-size: 15px; }
+
+        /* Podium */
+        .podium { display: flex; align-items: flex-end; justify-content: center; gap: 12px; margin: 8px 0 26px; }
+        .spot { flex: 1 1 0; max-width: 180px; background: var(--surface); border: 1px solid var(--border);
+                border-radius: 16px; padding: 16px 12px; text-align: center; position: relative; transition: transform 0.2s; }
+        .spot.first  { border-color: rgba(234,179,8,0.5);  box-shadow: 0 10px 34px rgba(234,179,8,0.16); transform: translateY(-10px); }
+        .spot.second { border-color: rgba(192,199,208,0.4); }
+        .spot.third  { border-color: rgba(205,127,50,0.4); }
+        .spot.you { outline: 2px solid var(--accent); outline-offset: 2px; }
+        .medal { font-size: 26px; line-height: 1; }
+        .spot .ava { width: 56px; height: 56px; border-radius: 50%; object-fit: cover; margin: 8px auto 6px;
+                     border: 2px solid var(--border); display: block; }
+        .spot.first .ava { width: 66px; height: 66px; border-color: var(--gold); }
+        .spot .nm { font-size: 13px; color: var(--text); font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .spot .sc { font-family: 'Syne', sans-serif; font-weight: 800; font-size: 20px; color: var(--text); margin-top: 4px; }
+        .spot.first .sc { font-size: 24px; }
+        .spot .cn { font-size: 11px; color: var(--muted); margin-top: 2px; }
+        .you-tag { font-size: 9px; color: var(--accent); border: 1px solid var(--accent); border-radius: 20px;
+                   padding: 1px 7px; position: absolute; top: 8px; right: 8px; }
+
+        /* Ranked list */
+        .lb-list { display: flex; flex-direction: column; gap: 8px; }
+        .lb-row { display: flex; align-items: center; gap: 14px; background: var(--surface); border: 1px solid var(--border);
+                  border-radius: 12px; padding: 11px 16px; }
+        .lb-row.you { border-color: var(--accent); background: var(--accent-subtle); }
+        .lb-rank { font-family: 'Syne', sans-serif; font-weight: 800; font-size: 16px; color: var(--muted);
+                   width: 30px; flex-shrink: 0; text-align: center; }
+        .lb-row.you .lb-rank { color: var(--accent); }
+        .lb-ava { width: 34px; height: 34px; border-radius: 50%; object-fit: cover; border: 1px solid var(--border); flex-shrink: 0; }
+        .lb-name { flex: 1; min-width: 0; font-size: 14px; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .lb-name .me-tag { font-size: 9px; color: var(--accent); border: 1px solid var(--accent); border-radius: 20px; padding: 1px 7px; margin-left: 8px; }
+        .lb-score { font-family: 'Syne', sans-serif; font-weight: 700; font-size: 15px; color: var(--text); text-align: right; flex-shrink: 0; }
+        .lb-score .cn { display: block; font-family: 'DM Mono', monospace; font-weight: 400; font-size: 11px; color: var(--muted); margin-top: 2px; }
+
+        /* Your sticky position callout */
+        .you-bar { position: sticky; bottom: 14px; margin-top: 18px; background: var(--accent-subtle);
+                   border: 1px solid var(--accent); border-radius: 12px; padding: 12px 16px; font-size: 13px;
+                   color: var(--text); display: flex; align-items: center; gap: 12px; backdrop-filter: blur(4px); }
+        .you-bar .yr { font-family: 'Syne', sans-serif; font-weight: 800; font-size: 16px; color: var(--accent); }
+
+        /* Locked / empty states */
+        .lb-locked { text-align: center; padding: 50px 20px; }
+        .lb-locked .ic { font-size: 40px; }
+        .lb-locked h2 { font-family: 'Syne', sans-serif; font-size: 20px; margin: 12px 0 6px; }
+        .lb-locked p { font-size: 13px; color: var(--muted); margin-bottom: 20px; line-height: 1.5; }
+        .lb-cta { display: inline-block; font-family: 'Syne', sans-serif; font-weight: 700; font-size: 14px;
+                  padding: 12px 24px; border-radius: 12px; border: 1px solid var(--accent);
+                  background: var(--accent-subtle); color: var(--text); text-decoration: none; transition: all 0.15s; }
+        .lb-cta:hover { background: var(--accent); color: #fff; }
+        .lb-loading, .lb-empty { text-align: center; color: var(--muted); font-size: 13px; padding: 40px 0; }
+    </style>
+</head>
+<body>
+<header>
+    <div class="logo"><div class="logo-dot"></div>Leaderboard</div>
+    <div class="nav">
+        <a href="/recordings/dashboard" class="nav-link">Dashboard</a>
+        <a href="/recordings/validate" class="nav-link">Validate</a>
+        <a href="/recordings/validate/submissions" class="nav-link">My Submissions</a>
+        <a href="/recordings/validate/leaderboard" class="nav-link active">Leaderboard</a>
+        <a href="/recordings/validate/wallet" class="nav-link">Wallet</a>
+        {% if is_admin %}<a href="/recordings/validate/admin" class="nav-link">Admin</a>{% endif %}
+        <span class="user-mini"><img src="{{ user.avatar }}" alt="{{ user.username }}"></span>
+        <a href="/recordings/logout" class="logout-btn">Logout</a>
+    </div>
+</header>
+
+<main>
+    <h1 class="page-title">Leaderboard</h1>
+    <p class="lb-sub">Ranked by minutes of audio you've validated — the same work the Wallet pays for. Climb the board, earn more. May the best grinder win. 🏆</p>
+
+    <div class="lb-tabs" id="lb-tabs">
+        <button class="lb-tab active" data-window="today">Today</button>
+        <button class="lb-tab" data-window="week">This week</button>
+        <button class="lb-tab" data-window="month">This month</button>
+        <button class="lb-tab" data-window="all">All-time</button>
+    </div>
+
+    <div id="board"><div class="lb-loading">Loading the standings…</div></div>
+</main>
+
+<script>window.CURRENT_USER_ID = "{{ user.id }}";</script>
+<script src="/recordings/static/leaderboard.js"></script>
+</body>
+</html>

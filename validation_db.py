@@ -1030,3 +1030,97 @@ def list_broadcasts(limit: int = 20) -> list:
         rows = (db.query(Broadcast)
                 .order_by(Broadcast.created_at.desc()).limit(limit).all())
         return [_serialize_broadcast(b) for b in rows]
+
+
+# ── Validator leaderboard ─────────────────────────────────────────────────────
+# A competition board ranking validators by the AUDIO THEY VALIDATED (validated_by
+# + duration, all decisions) — the SAME basis the Wallet pays on, so climbing the
+# board == earning more. This is per-VALIDATOR effort, distinct from the admin
+# Dataset page (which is per voice-OWNER completion). Time windows reset in local
+# (Jordan) time so "today" matches the real day, not UTC.
+
+LEADERBOARD_WINDOWS = ("today", "week", "month", "all")
+# Jordan is UTC+3 year-round (no DST since 2022); a whole-hour offset is exact.
+LEADERBOARD_UTC_OFFSET_HOURS = float(os.environ.get("LEADERBOARD_UTC_OFFSET_HOURS", "3"))
+
+
+def _window_start_utc(window: str):
+    """Naive-UTC datetime for the start of `window`, computed in local time so the
+    day/week/month resets at LOCAL midnight. None for all-time. Stored validated_at
+    is naive UTC, so we return the same to compare directly."""
+    if window not in ("today", "week", "month"):
+        return None
+    offset = timedelta(hours=LEADERBOARD_UTC_OFFSET_HOURS)
+    now_local = datetime.now(timezone.utc).replace(tzinfo=None) + offset
+    base = now_local.replace(hour=0, minute=0, second=0, microsecond=0)
+    if window == "week":
+        base = base - timedelta(days=base.weekday())   # Monday
+    elif window == "month":
+        base = base.replace(day=1)
+    return base - offset                                # back to naive UTC
+
+
+def has_validated(user_id: str) -> bool:
+    """Leaderboard view-gate: has this user made at least one decision (lifetime)?
+    Any decision counts (accept/reject/issue) — same basis as the score — so only
+    active participants get to see the competition."""
+    with SessionLocal() as db:
+        return db.query(Chunk.id).filter(
+            Chunk.validated_by == user_id,
+            Chunk.validation_status.in_(PAID_STATUSES),
+        ).first() is not None
+
+
+def get_leaderboard(window: str, viewer_id: str) -> dict:
+    """
+    Ranked validators for `window` (today|week|month|all): each
+    {rank, id, name, avatar, seconds, chunks}, sorted by validated audio time
+    desc. Also returns the viewer's own row (`me`, even if outside the list view)
+    and the group totals. Only validators with activity in the window appear.
+    """
+    if window not in LEADERBOARD_WINDOWS:
+        window = "today"
+    start = _window_start_utc(window)
+
+    with SessionLocal() as db:
+        q = db.query(
+            Chunk.validated_by.label("uid"),
+            func.coalesce(func.sum(Chunk.duration), 0.0).label("seconds"),
+            func.count(Chunk.id).label("chunks"),
+        ).filter(
+            Chunk.validated_by.isnot(None),
+            Chunk.validation_status.in_(PAID_STATUSES),
+        )
+        if start is not None:
+            q = q.filter(Chunk.validated_at >= start)
+        rows = q.group_by(Chunk.validated_by).all()
+
+        ids = [r.uid for r in rows]
+        users = (
+            {u.discord_id: u for u in db.query(User).filter(User.discord_id.in_(ids)).all()}
+            if ids else {}
+        )
+
+    # Rank by audio time, then chunk count as the tiebreaker.
+    rows.sort(key=lambda r: (float(r.seconds or 0.0), int(r.chunks or 0)), reverse=True)
+    entries = []
+    for i, r in enumerate(rows, start=1):
+        u = users.get(r.uid)
+        entries.append({
+            "rank": i,
+            "id": r.uid,
+            "name": (u.username if u else None) or r.uid,
+            "avatar": (u.avatar_url if u else None),
+            "seconds": round(float(r.seconds or 0.0), 1),
+            "chunks": int(r.chunks or 0),
+        })
+
+    me = next((e for e in entries if e["id"] == viewer_id), None)
+    return {
+        "window": window,
+        "entries": entries,
+        "me": me,
+        "participants": len(entries),
+        "total_seconds": round(sum(e["seconds"] for e in entries), 1),
+        "total_chunks": sum(e["chunks"] for e in entries),
+    }

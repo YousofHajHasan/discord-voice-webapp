@@ -258,6 +258,10 @@ for _label_key in LABEL_KEYS:
 # fast even on a multi-hundred-thousand-row table.
 _CHUNK_INDEXES = {
     "ix_chunks_owner_status": "(discord_id, validation_status)",
+    # Powers the validator leaderboard's windowed GROUP BY (who validated how much
+    # audio in a time range) — by validator, then decision time. See
+    # validation_db.get_leaderboard().
+    "ix_chunks_validatedby_at": "(validated_by, validated_at)",
 }
 
 
