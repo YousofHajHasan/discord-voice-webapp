@@ -11,12 +11,14 @@ Routes are defined without the /recordings prefix; nginx + the app's root_path
 handle that, exactly like the routes in main.py.
 """
 import os
+import re
 
 from fastapi import APIRouter, Request, HTTPException
 from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse, JSONResponse, FileResponse
 from fastapi.templating import Jinja2Templates
 
 import validation_db as vdb
+import discord_bot
 
 router = APIRouter()
 templates = Jinja2Templates(directory="templates")
@@ -345,6 +347,85 @@ async def api_admin_payout_reject(request: Request):
     body = await request.json()
     note = str(body.get("note", "")).strip() or None
     return _payout_result(vdb.reject_payout(admin["id"], _withdrawal_id(body), note))
+
+
+# ── Admin: broadcast a DM to users ────────────────────────────────────────────
+# Same _require_admin gate. Sending runs in a background task (discord_bot); these
+# routes just kick it off and report progress. Needs DISCORD_BOT_TOKEN in the env
+# and the bot to share a server with each recipient (see discord_bot.py).
+
+MAX_BROADCAST_CHARS = 2000   # Discord's hard limit on a single message's content
+
+
+def _parse_ids(raw) -> list:
+    """Pull Discord snowflakes out of free text — commas, spaces, or newlines all
+    work, so the admin can paste a list. Keeps pure-digit tokens 15–20 long."""
+    return [tok for tok in re.split(r"[^\d]+", str(raw or "")) if 15 <= len(tok) <= 20]
+
+
+@router.get("/validate/api/admin/broadcast/recipients")
+async def api_admin_broadcast_recipients(request: Request):
+    """The default recipient list (all web-app users) + whether messaging is wired
+    up (bot token present), so the UI can disable the composer if not."""
+    _require_admin(request)
+    return {"users": vdb.list_all_users(), "bot_ready": discord_bot.is_configured()}
+
+
+@router.post("/validate/api/admin/broadcast")
+async def api_admin_broadcast(request: Request):
+    """Start a broadcast to the selected users ∪ any pasted raw IDs. Returns a
+    job_id the client polls for live progress. 409 if one is already running."""
+    admin = _require_admin(request)
+    if not discord_bot.is_configured():
+        raise HTTPException(status_code=503, detail="Messaging isn't configured (set DISCORD_BOT_TOKEN).")
+
+    body = await request.json()
+    message = (body.get("message") or "").strip()
+    if not message:
+        raise HTTPException(status_code=400, detail="Enter a message to send.")
+    if len(message) > MAX_BROADCAST_CHARS:
+        raise HTTPException(status_code=400, detail=f"Message is too long (max {MAX_BROADCAST_CHARS} characters).")
+
+    selected = [str(x) for x in (body.get("user_ids") or [])]
+    extra = _parse_ids(body.get("extra_ids"))
+    # Dedupe, preserving order (selected first, then pasted extras).
+    seen, recipient_ids = set(), []
+    for i in selected + extra:
+        if i and i not in seen:
+            seen.add(i)
+            recipient_ids.append(i)
+    if not recipient_ids:
+        raise HTTPException(status_code=400, detail="Pick at least one recipient.")
+
+    names = vdb.usernames_for(recipient_ids)
+    recipients = [{"id": i, "name": names.get(i)} for i in recipient_ids]
+
+    job_id = discord_bot.start_broadcast(admin["id"], message, recipients)
+    if job_id is None:
+        raise HTTPException(status_code=409, detail="A broadcast is already in progress.")
+    return {"ok": True, "job_id": job_id, "total": len(recipients)}
+
+
+@router.get("/validate/api/admin/broadcast/status")
+async def api_admin_broadcast_status(request: Request):
+    """Live progress (status, counts, per-recipient results) for a running or
+    finished broadcast."""
+    _require_admin(request)
+    try:
+        job_id = int(request.query_params.get("job_id"))
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="Invalid job id")
+    status = discord_bot.job_status(job_id)
+    if status is None:
+        raise HTTPException(status_code=404, detail="Broadcast not found")
+    return status
+
+
+@router.get("/validate/api/admin/broadcasts")
+async def api_admin_broadcasts(request: Request):
+    """Recent broadcast history for the admin panel."""
+    _require_admin(request)
+    return {"broadcasts": vdb.list_broadcasts()}
 
 
 def _decide_response(result: str, ok_status: str):

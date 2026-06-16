@@ -249,6 +249,141 @@ async function decidePayout(action, id) {
   loadPayouts();
 }
 
+// ── Broadcast DM (compose modal + live progress + recent history) ────────────
+const bcOpenBtn   = document.getElementById('bc-open-btn');
+const bcModal     = document.getElementById('bc-modal');
+const bcCompose   = document.getElementById('bc-compose');
+const bcProgress  = document.getElementById('bc-progress');
+const bcMessage   = document.getElementById('bc-message');
+const bcCounter   = document.getElementById('bc-counter');
+const bcReclist   = document.getElementById('bc-reclist');
+const bcExtra     = document.getElementById('bc-extra');
+const bcCountEl   = document.getElementById('bc-count');
+const bcMsgEl     = document.getElementById('bc-msg');
+const bcSendBtn   = document.getElementById('bc-send');
+const bcRecentEl  = document.getElementById('bc-recent');
+const bcDisabledNote = document.getElementById('bc-disabled-note');
+const MAX_BC = 2000;
+
+let bcUsers = [];
+let bcPollTimer = null;
+
+function bcOpen()  { bcShowCompose(); bcModal.classList.add('open'); setTimeout(() => bcMessage.focus(), 30); }
+function bcClose() { bcModal.classList.remove('open'); if (bcPollTimer) { clearTimeout(bcPollTimer); bcPollTimer = null; } }
+function bcShowCompose()  { bcCompose.style.display = '';   bcProgress.style.display = 'none'; }
+function bcShowProgress() { bcCompose.style.display = 'none'; bcProgress.style.display = ''; }
+
+function bcUpdateCounter() { bcCounter.textContent = `${bcMessage.value.length} / ${MAX_BC}`; }
+function bcRefreshCount() { bcCountEl.textContent = bcReclist.querySelectorAll('input:checked').length; }
+
+function bcRenderRecipients() {
+  if (!bcUsers.length) { bcReclist.innerHTML = `<div class="a-loading" style="padding:14px 0">No users yet.</div>`; return; }
+  bcReclist.innerHTML = bcUsers.map((u) => `
+    <label class="bc-rec">
+      <input type="checkbox" value="${esc(u.id)}" checked>
+      <span class="nm">${esc(u.name)}</span>
+      <span class="id">${esc(u.id)}</span>
+    </label>`).join('');
+  bcReclist.querySelectorAll('input').forEach((i) => { i.onchange = bcRefreshCount; });
+  bcRefreshCount();
+}
+
+async function bcLoadRecipients() {
+  try {
+    const d = await getJSON(API + '/admin/broadcast/recipients');
+    bcUsers = d.users || [];
+    bcRenderRecipients();
+    if (!d.bot_ready) {
+      bcOpenBtn.disabled = true;
+      bcDisabledNote.className = 'bc-disabled-note';
+      bcDisabledNote.textContent = 'Messaging is off until DISCORD_BOT_TOKEN is set on the server.';
+    }
+  } catch (e) { /* recent history still loads below */ }
+}
+
+function bcResultItem(r) {
+  const ok = r.status === 'sent';
+  return `<li><span class="${ok ? 'ok' : 'bad'}">${ok ? '✅' : '❌'}</span>
+    <span>${esc(r.name || r.id)}${ok ? '' : ' — ' + esc(r.error || 'failed')}</span></li>`;
+}
+
+function bcRenderProgress(s) {
+  const total = s.total || 0, done = s.done || 0;
+  document.getElementById('bc-stat-done').textContent = done;
+  document.getElementById('bc-stat-total').textContent = total;
+  document.getElementById('bc-stat-sent').textContent = s.sent || 0;
+  document.getElementById('bc-stat-failed').textContent = s.failed || 0;
+  document.getElementById('bc-progress-fill').style.width = (total ? (done / total) * 100 : 0) + '%';
+  document.getElementById('bc-results').innerHTML = (s.results || []).map(bcResultItem).join('');
+  const running = s.status === 'running';
+  document.getElementById('bc-progress-title').textContent =
+    running ? `Sending… (${done}/${total})` : (s.error ? 'Finished with an error' : 'Broadcast complete');
+  document.getElementById('bc-close').style.display = running ? 'none' : '';
+}
+
+async function bcPoll(jobId) {
+  try {
+    const s = await getJSON(API + '/admin/broadcast/status?job_id=' + jobId);
+    bcRenderProgress(s);
+    if (s.status === 'running') { bcPollTimer = setTimeout(() => bcPoll(jobId), 1200); }
+    else { bcPollTimer = null; bcLoadRecent(); }
+  } catch (e) { bcPollTimer = setTimeout(() => bcPoll(jobId), 2000); }  // transient — keep trying
+}
+
+async function bcSend() {
+  const message = bcMessage.value.trim();
+  if (!message) { bcMsgEl.textContent = 'Enter a message.'; return; }
+  const ids = Array.from(bcReclist.querySelectorAll('input:checked')).map((i) => i.value);
+  const extra = bcExtra.value.trim();
+  const extraCount = (extra.match(/\d{15,20}/g) || []).length;
+  const total = ids.length + extraCount;   // rough — server dedupes selected ∪ extras
+  if (!total) { bcMsgEl.textContent = 'Pick at least one recipient.'; return; }
+  if (!confirm(`Send this message to ${total} recipient${total === 1 ? '' : 's'}?`)) return;
+
+  bcMsgEl.textContent = '';
+  bcSendBtn.disabled = true;
+  const { ok, json } = await postJSON(API + '/admin/broadcast', { message, user_ids: ids, extra_ids: extra });
+  bcSendBtn.disabled = false;
+  if (!ok) { bcMsgEl.textContent = json.detail || 'Could not start the broadcast.'; return; }
+  bcShowProgress();
+  bcRenderProgress({ status: 'running', total: json.total, done: 0, sent: 0, failed: 0, results: [] });
+  bcPoll(json.job_id);
+}
+
+function bcRenderRecent(list) {
+  bcRecentEl.innerHTML = !list.length ? '' : list.map((b) => {
+    const failed = (b.results || []).filter((r) => r.status === 'failed');
+    const tag = b.status === 'interrupted' ? ' · interrupted' : (b.status === 'running' ? ' · sending…' : '');
+    const detail = failed.length
+      ? `<ul class="bc-detail-list">${failed.map(bcResultItem).join('')}</ul>`
+      : `<ul class="bc-detail-list"><li><span class="ok">✅</span><span>Everyone selected was reached.</span></li></ul>`;
+    return `<li><details>
+      <summary>
+        <span class="bc-msg-snip">${esc((b.message || '').replace(/\s+/g, ' '))}</span>
+        <span class="bc-counts"><span class="ok">${b.sent || 0} sent</span> · <span class="bad">${b.failed || 0} failed</span> · ${fmtDate(b.created_at)}${tag}</span>
+      </summary>
+      ${detail}
+    </details></li>`;
+  }).join('');
+}
+
+async function bcLoadRecent() {
+  try { bcRenderRecent((await getJSON(API + '/admin/broadcasts')).broadcasts || []); }
+  catch (e) { /* ignore — panel just stays empty */ }
+}
+
+bcOpenBtn.onclick = bcOpen;
+document.getElementById('bc-cancel').onclick = bcClose;
+document.getElementById('bc-close').onclick = bcClose;
+bcSendBtn.onclick = bcSend;
+bcMessage.oninput = bcUpdateCounter;
+document.getElementById('bc-all').onclick  = () => { bcReclist.querySelectorAll('input').forEach((i) => { i.checked = true;  }); bcRefreshCount(); };
+document.getElementById('bc-none').onclick = () => { bcReclist.querySelectorAll('input').forEach((i) => { i.checked = false; }); bcRefreshCount(); };
+bcModal.addEventListener('click', (e) => { if (e.target === bcModal) bcClose(); });
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && bcModal.classList.contains('open')) bcClose(); });
+
 loadOverview();
 loadAdmins();
 loadPayouts();
+bcLoadRecipients();
+bcLoadRecent();

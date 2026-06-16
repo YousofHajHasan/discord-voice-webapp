@@ -99,6 +99,61 @@
         .badge.paid { color: var(--green); border-color: rgba(34,197,94,0.3); background: var(--green-subtle); }
         .payout-amount { color: var(--text); font-weight: 700; }
         .pending-sum { font-size: 12px; color: var(--gold); margin-top: 4px; }
+
+        /* Broadcast panel */
+        .broadcast-intro { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
+        .bc-disabled-note { font-size: 11px; color: var(--gold); margin-top: 10px; }
+        .bc-recent { list-style: none; padding: 0; margin: 18px 0 0; display: flex; flex-direction: column; gap: 8px; }
+        .bc-recent details { background: var(--surface-2); border: 1px solid var(--border); border-radius: 10px; padding: 10px 14px; }
+        .bc-recent summary { cursor: pointer; display: flex; align-items: center; justify-content: space-between; gap: 12px; list-style: none; }
+        .bc-recent summary::-webkit-details-marker { display: none; }
+        .bc-msg-snip { color: var(--text); font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+        .bc-counts { font-size: 11.5px; color: var(--muted); white-space: nowrap; flex-shrink: 0; }
+        .bc-counts .ok { color: var(--green); }
+        .bc-counts .bad { color: var(--red); }
+
+        /* Modal (shared look with wallet.html) */
+        .modal { position: fixed; inset: 0; z-index: 200; display: none; align-items: center; justify-content: center; padding: 20px; background: rgba(0,0,0,0.6); backdrop-filter: blur(4px); }
+        .modal.open { display: flex; }
+        .modal-box { width: 100%; max-width: 560px; background: var(--surface); border: 1px solid var(--border); border-radius: 16px; padding: 24px; max-height: 88vh; overflow-y: auto; }
+        .modal-box h3 { font-family: 'Syne', sans-serif; font-size: 19px; margin-bottom: 6px; }
+        .modal-help { font-size: 12.5px; color: var(--muted); margin-bottom: 16px; line-height: 1.5; }
+        .bc-textarea { width: 100%; min-height: 96px; resize: vertical; background: var(--surface-2); color: var(--text); border: 1px solid var(--border); border-radius: 10px; padding: 12px 13px; font-family: inherit; font-size: 14px; line-height: 1.5; }
+        .bc-textarea:focus { outline: none; border-color: var(--accent); }
+        .bc-counter { font-size: 11px; color: var(--muted); text-align: right; margin-top: 4px; }
+        .bc-field-label { font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted);
+                          margin: 18px 0 8px; display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+        .bc-pick-actions { display: flex; gap: 12px; }
+        .bc-link { background: none; border: none; color: var(--accent); font-size: 12px; cursor: pointer; padding: 0; font-family: inherit; text-transform: none; letter-spacing: 0; }
+        .bc-link:hover { text-decoration: underline; }
+        .bc-reclist { max-height: 210px; overflow-y: auto; border: 1px solid var(--border); border-radius: 10px; padding: 6px; background: var(--surface-2); }
+        .bc-rec { display: flex; align-items: center; gap: 9px; padding: 6px 8px; border-radius: 8px; cursor: pointer; }
+        .bc-rec:hover { background: var(--surface); }
+        .bc-rec input { accent-color: var(--accent); flex-shrink: 0; }
+        .bc-rec .nm { font-size: 13px; color: var(--text); }
+        .bc-rec .id { font-size: 11px; color: var(--muted); font-family: 'DM Mono', monospace; margin-left: auto; }
+        .bc-extra { width: 100%; min-height: 50px; resize: vertical; background: var(--surface-2); color: var(--text); border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; font-family: 'DM Mono', monospace; font-size: 12px; }
+        .bc-extra:focus { outline: none; border-color: var(--accent); }
+        .modal-actions { display: flex; gap: 10px; margin-top: 20px; justify-content: flex-end; align-items: center; }
+        .modal-msg { font-size: 12px; color: var(--red); margin-right: auto; }
+        .modal-btn { font-family: 'Syne', sans-serif; font-weight: 700; font-size: 13px; cursor: pointer; padding: 10px 18px; border-radius: 10px; border: 1px solid var(--border); background: var(--surface-2); color: var(--text); transition: all 0.15s; }
+        .modal-btn.primary { border-color: var(--green); background: var(--green-subtle); color: var(--green); }
+        .modal-btn.primary:hover:not(:disabled) { background: var(--green); color: #fff; }
+        .modal-btn.primary:disabled { opacity: 0.4; cursor: not-allowed; }
+        .modal-btn.ghost:hover { border-color: var(--border-hover); }
+
+        /* Broadcast progress view */
+        .bc-progress-bar { height: 10px; background: var(--surface-2); border: 1px solid var(--border); border-radius: 6px; overflow: hidden; margin: 8px 0 14px; }
+        .bc-progress-fill { height: 100%; background: linear-gradient(90deg, #16a34a, var(--green)); width: 0; transition: width 0.4s ease; }
+        .bc-progress-stats { display: flex; gap: 18px; font-size: 13px; color: var(--muted); margin-bottom: 14px; }
+        .bc-progress-stats b { font-family: 'Syne', sans-serif; color: var(--text); }
+        .bc-progress-stats .ok b { color: var(--green); }
+        .bc-progress-stats .bad b { color: var(--red); }
+        .bc-detail-list { list-style: none; padding: 12px 0 0; margin: 8px 0 0; border-top: 1px solid var(--border);
+                          display: flex; flex-direction: column; gap: 5px; max-height: 240px; overflow-y: auto; }
+        .bc-detail-list li { font-size: 12.5px; color: var(--muted); display: flex; gap: 8px; align-items: baseline; }
+        .bc-detail-list .ok { color: var(--green); }
+        .bc-detail-list .bad { color: var(--red); }
     </style>
 </head>
 <body>
@@ -121,6 +176,18 @@
 
     <div id="overview"><div class="a-loading">Loading dataset stats…</div></div>
 
+    <div class="admins-card" id="broadcast-card">
+        <div class="broadcast-intro">
+            <div>
+                <div class="section-title" style="margin:0">Broadcast a DM</div>
+                <p class="admin-sub" style="margin:6px 0 0">Send a custom direct message to your users. Everyone is selected by default — narrow it down or paste extra Discord IDs in the composer.</p>
+            </div>
+            <button id="bc-open-btn" type="button" class="manage-btn">📣 Compose broadcast</button>
+        </div>
+        <div id="bc-disabled-note"></div>
+        <ul id="bc-recent" class="bc-recent"></ul>
+    </div>
+
     <div class="admins-card" id="payouts-card">
         <div class="section-title">Payouts</div>
         <p class="admin-sub" style="margin-bottom:14px">Pending withdrawal requests. Send the money via CliQ, then <b>Approve</b> to mark it paid. <b>Reject</b> returns the amount to the user's balance.</p>
@@ -139,6 +206,51 @@
         <ul id="admin-list" class="admin-list"></ul>
     </div>
 </main>
+
+<div class="modal" id="bc-modal">
+    <div class="modal-box">
+        <!-- Compose -->
+        <div id="bc-compose">
+            <h3>Broadcast a direct message</h3>
+            <p class="modal-help">Each selected user is DMed by the bot. People who block DMs or don't share a server with the bot can't be reached — you'll see exactly who got it.</p>
+            <textarea id="bc-message" class="bc-textarea" maxlength="2000" placeholder="Type your message…"></textarea>
+            <div id="bc-counter" class="bc-counter">0 / 2000</div>
+
+            <div class="bc-field-label">
+                <span>Recipients (<span id="bc-count">0</span>)</span>
+                <span class="bc-pick-actions">
+                    <button type="button" class="bc-link" id="bc-all">Select all</button>
+                    <button type="button" class="bc-link" id="bc-none">Clear</button>
+                </span>
+            </div>
+            <div id="bc-reclist" class="bc-reclist"><div class="a-loading" style="padding:14px 0">Loading users…</div></div>
+
+            <div class="bc-field-label"><span>Add more by Discord ID (optional)</span></div>
+            <textarea id="bc-extra" class="bc-extra" placeholder="Paste extra IDs — separated by spaces, commas, or new lines"></textarea>
+
+            <div class="modal-actions">
+                <span id="bc-msg" class="modal-msg"></span>
+                <button class="modal-btn ghost" id="bc-cancel">Cancel</button>
+                <button class="modal-btn primary" id="bc-send">Send</button>
+            </div>
+        </div>
+
+        <!-- Progress -->
+        <div id="bc-progress" style="display:none">
+            <h3 id="bc-progress-title">Sending…</h3>
+            <div class="bc-progress-bar"><div id="bc-progress-fill" class="bc-progress-fill"></div></div>
+            <div class="bc-progress-stats">
+                <span><b id="bc-stat-done">0</b> / <span id="bc-stat-total">0</span> done</span>
+                <span class="ok">✅ <b id="bc-stat-sent">0</b> sent</span>
+                <span class="bad">❌ <b id="bc-stat-failed">0</b> failed</span>
+            </div>
+            <ul id="bc-results" class="bc-detail-list"></ul>
+            <div class="modal-actions">
+                <button class="modal-btn ghost" id="bc-close" style="display:none">Done</button>
+            </div>
+        </div>
+    </div>
+</div>
 
 <script>window.CURRENT_USER_ID = "{{ user.id }}";</script>
 <script src="/recordings/static/admin.js"></script>

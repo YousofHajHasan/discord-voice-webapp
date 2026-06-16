@@ -207,6 +207,35 @@ class Withdrawal(Base):
     note = Column(String, nullable=True)                     # optional admin note / reason
 
 
+class Broadcast(Base):
+    """
+    One admin broadcast: a custom DM sent to a chosen set of users (the validators,
+    optionally plus pasted raw IDs). Unlike earnings, there's no "computed live"
+    here — this row IS the durable record (history was a deliberate choice).
+
+    Sending runs as ONE background task at a time (discord_bot.start_broadcast);
+    this row is created `running` and finalized with the per-recipient outcome.
+    `results` is a JSON array [{id, name, status, error}] so the full delivery
+    detail lives on the row without a second table. A row left `running` after a
+    restart (process died mid-send) is flipped to `interrupted` on the next boot
+    by mark_running_broadcasts_interrupted(), mirroring the other self-healing
+    migrations. Like access_grants/admins it's a NEW table create_all() makes on
+    first boot, so no column migration is needed.
+    """
+    __tablename__ = "broadcasts"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    sent_by = Column(String, nullable=False)                 # admin discord_id who sent it
+    message = Column(Text, nullable=False)
+    total = Column(Integer, nullable=False, default=0)       # recipients attempted
+    sent_count = Column(Integer, nullable=False, default=0)
+    failed_count = Column(Integer, nullable=False, default=0)
+    status = Column(String, nullable=False, default="running", index=True)  # running|done|interrupted
+    results = Column(Text, nullable=True)                    # JSON [{id, name, status, error}]
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    finished_at = Column(DateTime, nullable=True)
+
+
 # Columns that may be missing on an older live `chunks` table. Maps column name
 # -> the type clause used in "ALTER TABLE chunks ADD COLUMN <name> <clause>".
 _CHUNK_COLUMN_MIGRATIONS = {
@@ -288,12 +317,29 @@ def reopen_unlabeled_verified() -> int:
     return res.rowcount or 0
 
 
+def mark_running_broadcasts_interrupted() -> int:
+    """
+    A broadcast left `running` means the process died mid-send; it can never
+    resume, so flag it `interrupted` on boot. Idempotent and self-healing (mirrors
+    reopen_unlabeled_verified): once finalized, broadcasts are `done`, so after the
+    first run this matches nothing. One short write txn, no file I/O.
+    """
+    if "broadcasts" not in inspect(engine).get_table_names():
+        return 0
+    with engine.begin() as conn:
+        res = conn.execute(text(
+            "UPDATE broadcasts SET status = 'interrupted' WHERE status = 'running'"
+        ))
+    return res.rowcount or 0
+
+
 def init_db():
     os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
     Base.metadata.create_all(engine)
     _run_light_migrations()
     _ensure_indexes()
     reopen_unlabeled_verified()
+    mark_running_broadcasts_interrupted()
 
 
 def upsert_user(discord_id: str, username: str, avatar_url: str):

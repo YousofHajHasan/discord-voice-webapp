@@ -15,11 +15,12 @@ Status model (Chunk.validation_status):
                it's hidden from the queue and the dashboard.
 """
 import os
+import json
 from datetime import datetime, timezone, timedelta
 
 from sqlalchemy import or_, and_, update, select, func, case
 from database import (
-    SessionLocal, Chunk, AccessGrant, Admin, User, Withdrawal, PayoutProfile,
+    SessionLocal, Chunk, AccessGrant, Admin, User, Withdrawal, PayoutProfile, Broadcast,
     _resolve_filepath, measure_chunk_duration, trim_wav, RECORDINGS_PATH,
     VALIDATION_LEASE_MINUTES, LABEL_KEYS, LABEL_NORMAL_KEY,
 )
@@ -945,3 +946,87 @@ def approve_payout(admin_id: str, withdrawal_id: int) -> str:
 def reject_payout(admin_id: str, withdrawal_id: int, note=None) -> str:
     """Reject a pending withdrawal — its amount returns to the user's available."""
     return _decide_payout(admin_id, withdrawal_id, "rejected", note=note)
+
+
+# ── Admin: broadcast DMs ──────────────────────────────────────────────────────
+# Persistence for the admin "message all users" feature. The Discord REST calls
+# and the one-at-a-time background job live in discord_bot.py; this module only
+# owns the durable record (the broadcasts table) and the recipient name lookups.
+
+def list_all_users() -> list:
+    """Every web-app user (logged in at least once), for the broadcast recipient
+    picker. Each: {id, name}. Sorted by display name."""
+    with SessionLocal() as db:
+        users = db.query(User).order_by(func.lower(User.username).asc()).all()
+        return [{"id": u.discord_id, "name": u.username or u.discord_id} for u in users]
+
+
+def usernames_for(ids) -> dict:
+    """Map {discord_id: username} for the given ids (known web-app users only).
+    Raw pasted IDs with no user row simply won't appear — discord_bot resolves
+    those names from Discord at send time."""
+    ids = [i for i in ids if i]
+    if not ids:
+        return {}
+    with SessionLocal() as db:
+        return {u.discord_id: u.username
+                for u in db.query(User).filter(User.discord_id.in_(ids)).all()}
+
+
+def _serialize_broadcast(b) -> dict:
+    sent = b.sent_count or 0
+    failed = b.failed_count or 0
+    return {
+        "id": b.id,
+        "status": b.status,
+        "total": b.total or 0,
+        "done": sent + failed,
+        "sent": sent,
+        "failed": failed,
+        "results": json.loads(b.results) if b.results else [],
+        "error": None,
+        "message": b.message,
+        "sent_by": b.sent_by,
+        "created_at": b.created_at.isoformat() if b.created_at else None,
+        "finished_at": b.finished_at.isoformat() if b.finished_at else None,
+    }
+
+
+def create_broadcast(admin_id: str, message: str, total: int) -> int:
+    """Insert a `running` broadcast row and return its id (the job id)."""
+    with SessionLocal() as db:
+        b = Broadcast(sent_by=admin_id, message=message, total=total, status="running")
+        db.add(b)
+        db.commit()
+        db.refresh(b)
+        return b.id
+
+
+def finalize_broadcast(broadcast_id: int, sent: int, failed: int, results) -> None:
+    """Record the final per-recipient outcome and flip the row to `done`."""
+    with SessionLocal() as db:
+        b = db.get(Broadcast, broadcast_id)
+        if not b:
+            return
+        b.sent_count = sent
+        b.failed_count = failed
+        b.status = "done"
+        b.results = json.dumps(results, ensure_ascii=False)
+        b.finished_at = datetime.now(timezone.utc)
+        db.commit()
+
+
+def get_broadcast(broadcast_id: int) -> dict | None:
+    """Serialized broadcast row — the status endpoint's fallback once a job is no
+    longer live in memory (finished, or after a restart)."""
+    with SessionLocal() as db:
+        b = db.get(Broadcast, broadcast_id)
+        return _serialize_broadcast(b) if b else None
+
+
+def list_broadcasts(limit: int = 20) -> list:
+    """Recent broadcasts (newest first) for the admin history panel."""
+    with SessionLocal() as db:
+        rows = (db.query(Broadcast)
+                .order_by(Broadcast.created_at.desc()).limit(limit).all())
+        return [_serialize_broadcast(b) for b in rows]

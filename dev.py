@@ -258,6 +258,42 @@ def seed_wallet_demo():
     print("[dev] seeded wallet demo: localdev ~$8 (no alias, admin), teammate ~$12 (1 paid + 1 pending), alice ~$2 (below min)")
 
 
+def _install_broadcast_mock():
+    """
+    DEV-ONLY: make the admin "Broadcast a DM" feature fully clickable with NO real
+    Discord calls. Pretends a bot token is configured (so the composer enables) and
+    SIMULATES each recipient's outcome, so you can watch the progress bar, the
+    per-recipient ✅/❌ report, and the history panel without DMing a single person.
+
+    The simulation is deterministic by the recipient's last digit so the seeded
+    users give a realistic mix: ids ending in 3 "fail" (DMs closed), ids ending in
+    2 get rate-limited once then succeed (shows the 429-retry path), everyone else
+    sends. Never runs in prod — dev.py isn't the entrypoint.
+    """
+    import discord_bot
+    discord_bot.BOT_TOKEN = "dev-mock-token"     # is_configured() -> True
+    discord_bot.SEND_DELAY_SECONDS = 0.5         # snappier than the real 1s pace
+
+    _attempts = {}
+
+    async def _mock_attempt(client, user_id, content):
+        uid = str(user_id)
+        _attempts[uid] = _attempts.get(uid, 0) + 1
+        if uid.endswith("2") and _attempts[uid] == 1:
+            return {"ok": False, "error": None, "rate_limited": True, "retry_after": 0.4}
+        if uid.endswith("3"):
+            return {"ok": False, "error": "DMs closed or no shared server (simulated)",
+                    "rate_limited": False, "retry_after": 0.0}
+        return {"ok": True, "error": None, "rate_limited": False, "retry_after": 0.0}
+
+    async def _mock_name(client, user_id):
+        return f"user-{str(user_id)[-4:]}"       # fake display name for pasted raw IDs
+
+    discord_bot._attempt_dm = _mock_attempt
+    discord_bot._fetch_username = _mock_name
+    print("[dev] broadcast mock installed: composer enabled, sends are SIMULATED (no real DMs)")
+
+
 def _setup_app():
     """Wire the dev bypass + seed data, return the FastAPI app (no server start)."""
     # Safety: never let the login-bypass run against the production volumes.
@@ -303,6 +339,7 @@ def _setup_app():
 
     app_main.get_current_user = _dev_current_user
     validate.get_current_user = _dev_current_user
+    _install_broadcast_mock()
 
     @app_main.app.get("/dev/as/{uid}")
     def _dev_login_as(uid: str):
@@ -336,6 +373,8 @@ def main():
     print(f"     as {DEV_USERNAME}: ~$8 available, NO alias -> Withdraw asks for the CliQ alias,")
     print("       then creates a pending request you can approve as admin.")
     print(f"     Admin Payouts: {base}/validate/admin  (teammate has a pending request to approve/reject).")
+    print(f"  ── Broadcast: {base}/validate/admin  →  '📣 Compose broadcast'")
+    print("     Sends are SIMULATED in dev (no real DMs): some ✅, some ❌, watch live progress + history.")
     print("=" * 66 + "\n")
 
     import uvicorn
