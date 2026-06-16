@@ -504,6 +504,24 @@ async def api_issue(request: Request):
     return _decide_response(vdb.issue_chunk(user["id"], owner_id, date, filename, text), "issue")
 
 
+@router.post("/validate/api/skip")
+async def api_skip(request: Request):
+    """Pass on a chunk: it's not validated (stays pending for others), released to
+    the pool immediately, and never re-served to this viewer."""
+    user = _require_user(request)
+    body = await request.json()
+    owner_id = str(body.get("owner_id", ""))
+    date = str(body.get("date", ""))
+    filename = str(body.get("filename", ""))
+    _safe(owner_id, date, filename)
+    result = vdb.skip_chunk(user["id"], owner_id, date, filename)
+    if result == "ok":
+        return JSONResponse({"ok": True})
+    if result == "denied":
+        raise HTTPException(status_code=403, detail="No access to this owner")
+    raise HTTPException(status_code=404, detail="Chunk not found")
+
+
 @router.post("/validate/api/trim_accept")
 async def api_trim_accept(request: Request):
     """

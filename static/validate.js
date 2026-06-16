@@ -60,6 +60,7 @@ const editor = new ChunkEditor(host, {
   onAccept: (text, labels) => decide('/accept', 'verified', { transcription: text, labels }),
   onIssue:  (text)         => decide('/issue',  'issue',    { transcription: text }),
   onReject: ()             => decide('/reject', 'rejected', {}),
+  onSkip:   ()             => skipChunk(),
   onTrimAccept: (text, start, end, labels) => trimAccept(text, start, end, labels),
 });
 
@@ -258,6 +259,30 @@ async function decide(endpoint, newStatus, body) {
     pos = frontier < buffer.length ? frontier : buffer.length - 1;
   }
   render();
+}
+
+// Skip: pass on this chunk. NOT a decision — the server records the skip (so it's
+// never re-served to us and we can't return to it) and releases it for others. We
+// drop it from this session's buffer like the 409 path, so Back can't land on it.
+// Await the POST before any prefetch so the next window can't re-serve it.
+async function skipChunk() {
+  const it = buffer[pos];
+  if (!it) return;
+
+  try {
+    await fetch(`${API}/skip`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ owner_id: it.owner_id, date: it.date, filename: it.filename }),
+    });
+  } catch (_) { /* remove locally regardless — the skip is best-effort idempotent */ }
+
+  buffer.splice(pos, 1);
+  if (frontier > pos) frontier--;
+  pendingTotal = Math.max(0, pendingTotal - 1);
+  if (pos > buffer.length - 1) pos = Math.max(0, buffer.length - 1);
+  render();
+  if (!noMore && (buffer.length - frontier) <= PREFETCH_AT_REMAINING) fetchBatch().then(() => render(false));
+  flash('Skipped — someone else can pick it up.');
 }
 
 // Trim & Accept: cut the head/tail, save the result as a verified _updated chunk,

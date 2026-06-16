@@ -20,7 +20,7 @@ from datetime import datetime, timezone, timedelta
 
 from sqlalchemy import or_, and_, update, select, func, case
 from database import (
-    SessionLocal, Chunk, AccessGrant, Admin, User, Withdrawal, PayoutProfile, Broadcast,
+    SessionLocal, Chunk, AccessGrant, Admin, User, Withdrawal, PayoutProfile, Broadcast, Skip,
     _resolve_filepath, measure_chunk_duration, trim_wav, RECORDINGS_PATH,
     VALIDATION_LEASE_MINUTES, LABEL_KEYS, LABEL_NORMAL_KEY,
 )
@@ -244,18 +244,22 @@ def claim_pending_window(viewer_id: str, owner_id: str, limit: int = 10):
     limit = max(1, min(int(limit), 200))
     now = datetime.now(timezone.utc)
     cutoff = now - timedelta(minutes=VALIDATION_LEASE_MINUTES)
+    # Chunks this viewer has SKIPPED are permanently out of their queue (they may
+    # already have been decided by someone else — see skip_chunk).
+    my_skips = select(Skip.chunk_id).where(Skip.viewer_id == viewer_id)
 
     with SessionLocal() as db:
-        # The next claimable window: pending, not deleted, and either unclaimed or
-        # with an expired lease. (Rows already leased by this viewer are excluded
-        # so each fetch returns genuinely new work — they're still held, just not
-        # re-sent.) Ordered owner-stable by date -> filename.
+        # The next claimable window: pending, not deleted, not skipped-by-me, and
+        # either unclaimed or with an expired lease. (Rows already leased by this
+        # viewer are excluded so each fetch returns genuinely new work — they're
+        # still held, just not re-sent.) Ordered owner-stable by date -> filename.
         candidates = (
             select(Chunk.id)
             .where(
                 Chunk.discord_id == owner_id,
                 Chunk.is_deleted == False,
                 Chunk.validation_status == "pending",
+                Chunk.id.notin_(my_skips),
                 or_(
                     Chunk.validation_claimed_by.is_(None),
                     Chunk.validation_claimed_at < cutoff,
@@ -308,12 +312,15 @@ def claim_pending_window(viewer_id: str, owner_id: str, limit: int = 10):
             )
             db.commit()
 
+        # Pending count as THIS viewer sees it — excludes what they've skipped, so
+        # the "N pending in queue" stat never promises work they can't be served.
         total = (
             db.query(Chunk)
             .filter(
                 Chunk.discord_id == owner_id,
                 Chunk.is_deleted == False,
                 Chunk.validation_status == "pending",
+                Chunk.id.notin_(my_skips),
             )
             .count()
         )
@@ -560,6 +567,11 @@ def _decide(viewer_id: str, owner_id: str, date: str, filename: str,
         row = db.get(Chunk, chunk_id)
         if not row or row.is_deleted:
             return "notfound"
+        # If this viewer SKIPPED this chunk, it's no longer theirs to decide — they
+        # passed on it and it may already be someone else's. (Unreachable from the
+        # UI, which drops skipped chunks from the buffer; this is the server guard.)
+        if db.get(Skip, (viewer_id, chunk_id)):
+            return "conflict"
         # Concurrency guard / last line of defense: if this chunk was already
         # decided by SOMEONE ELSE (e.g. our lease expired and they reclaimed and
         # decided it), don't silently clobber their work. Re-deciding our OWN
@@ -608,6 +620,33 @@ def issue_chunk(viewer_id: str, owner_id: str, date: str, filename: str, text: s
     text allowed. (Head/tail noise is handled in-place by trim_accept_chunk.)
     """
     return _decide(viewer_id, owner_id, date, filename, "issue", text)
+
+
+def skip_chunk(viewer_id: str, owner_id: str, date: str, filename: str) -> str:
+    """
+    PASS on a chunk — "I can't judge this, let someone else try." NOT a decision:
+    the chunk stays `pending` (no validated_by, no pay, still counts as remaining
+    for others). We record the skip (so it's never re-served to this viewer and
+    they can't re-decide it) and immediately RELEASE this viewer's lease so another
+    validator can take it right away. Returns "ok" | "denied" | "notfound".
+    Idempotent on the (viewer, chunk) PK.
+    """
+    if not can_access(viewer_id, owner_id):
+        return "denied"
+    chunk_id = f"{owner_id}:{date}:{filename}"
+    with SessionLocal() as db:
+        row = db.get(Chunk, chunk_id)
+        if not row or row.is_deleted:
+            return "notfound"
+        if not db.get(Skip, (viewer_id, chunk_id)):
+            db.add(Skip(viewer_id=viewer_id, chunk_id=chunk_id))
+        # Release only OUR still-pending lease — never touch a chunk someone has
+        # since decided (its lease was already consumed).
+        if (row.validation_status or "pending") == "pending" and row.validation_claimed_by == viewer_id:
+            row.validation_claimed_by = None
+            row.validation_claimed_at = None
+        db.commit()
+    return "ok"
 
 
 def trim_accept_chunk(viewer_id: str, owner_id: str, date: str, filename: str,

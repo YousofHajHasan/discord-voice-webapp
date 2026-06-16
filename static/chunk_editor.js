@@ -29,6 +29,7 @@
       this.onAccept  = opts.onAccept || (async () => {});
       this.onReject  = opts.onReject || (async () => {});
       this.onIssue   = opts.onIssue || null;   // optional 3rd action
+      this.onSkip    = opts.onSkip || null;    // optional "pass" — not a decision
       this.onTrimAccept = opts.onTrimAccept || null;  // optional "Trim & Accept"
       // Content-classification labels (multi-label chips). The host supplies the
       // taxonomy via opts.labels or setLabels(); verifying requires >=1 chosen.
@@ -38,6 +39,7 @@
       this.acceptLabel = opts.acceptLabel || 'Accept';
       this.rejectLabel = opts.rejectLabel || 'Delete';
       this.issueLabel  = opts.issueLabel  || 'Issue';
+      this.skipLabel   = opts.skipLabel   || 'Skip';
 
       this.audio   = new Audio();
       this.audioCtx = null;
@@ -91,6 +93,7 @@
           <div class="ce-chips"></div>
         </div>
         <div class="ce-actions">
+          <button class="ce-btn ce-skip" type="button" title="Can't judge this one — pass it to someone else"></button>
           <button class="ce-btn ce-reject"></button>
           <button class="ce-btn ce-issue"></button>
           <button class="ce-btn ce-accept"></button>
@@ -115,11 +118,14 @@
       this.acceptBtn = this.el.querySelector('.ce-accept');
       this.rejectBtn = this.el.querySelector('.ce-reject');
       this.issueBtn  = this.el.querySelector('.ce-issue');
+      this.skipBtn   = this.el.querySelector('.ce-skip');
 
       this.acceptBtn.textContent = this.acceptLabel;
       this.rejectBtn.textContent = this.rejectLabel;
       this.issueBtn.textContent  = this.issueLabel;
+      this.skipBtn.textContent   = this.skipLabel;
       if (!this.onIssue) this.issueBtn.style.display = 'none';  // hide if not wired
+      if (!this.onSkip)  this.skipBtn.style.display = 'none';   // hide if not wired
       if (!this.onTrimAccept) this.trimBtn.style.display = 'none';  // trim only where wired
 
       this.playBtn.addEventListener('click', () => this.togglePlay());
@@ -154,6 +160,12 @@
         if (!this.onIssue) return;
         this._busy(true);
         try { await this.onIssue(this.textEl.value); }
+        finally { this._busy(false); }
+      });
+      this.skipBtn.addEventListener('click', async () => {
+        if (!this.onSkip) return;   // a pass — no labels/text required
+        this._busy(true);
+        try { await this.onSkip(); }
         finally { this._busy(false); }
       });
 
@@ -195,6 +207,12 @@
       this.chunk = chunk;
       this.nameEl.textContent = chunk.filename;
       this.dateEl.textContent = chunk.date;
+      // Skip is a pass on UNDECIDED work — hide it when reviewing an already
+      // decided chunk (Back-navigation), like the trim button.
+      if (this.skipBtn) {
+        this.skipBtn.style.display =
+          (this.onSkip && (!chunk.status || chunk.status === 'pending')) ? '' : 'none';
+      }
       this._setStatus(chunk.status);
 
       // Text shown in the box, in priority order:

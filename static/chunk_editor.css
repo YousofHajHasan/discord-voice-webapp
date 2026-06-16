@@ -79,6 +79,9 @@
 .ce-issue:hover:not(:disabled) { background: var(--gold); color: #1a1a1a; border-color: var(--gold); }
 .ce-reject { border-color: rgba(239,68,68,0.3); background: var(--red-subtle); color: var(--red); }
 .ce-reject:hover:not(:disabled) { background: var(--red); color: #fff; border-color: var(--red); }
+/* Skip is a neutral "pass" — compact, left-aligned, set apart from the verdicts. */
+.ce-skip { flex: 0 0 auto; margin-right: auto; background: transparent; color: var(--muted); }
+.ce-skip:hover:not(:disabled) { color: var(--text); border-color: var(--border-hover); }
 
 /* Trim mode: toggle button, waveform cursor, kept-range bar, morphed accept */
 .ce-trimtoggle {

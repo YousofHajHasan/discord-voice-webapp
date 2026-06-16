@@ -236,6 +236,24 @@ class Broadcast(Base):
     finished_at = Column(DateTime, nullable=True)
 
 
+class Skip(Base):
+    """
+    A validator's PASS on a chunk — "I can't judge this, let someone else try."
+    This is NOT a decision: no validated_by, no pay, and the chunk stays `pending`
+    so it's still in the pool for OTHER validators. The row's only jobs are to
+    (1) keep that chunk out of the skipper's future queue fetches and (2) block the
+    skipper from re-deciding it (the back-button guard: skip releases the lease, so
+    someone else may take and decide it — the skipper must never clobber that).
+    One row per (viewer, chunk); the composite PK makes re-skipping idempotent.
+    NEW table create_all() makes on first boot — no migration.
+    """
+    __tablename__ = "validation_skips"
+
+    viewer_id = Column(String, primary_key=True)   # who skipped
+    chunk_id = Column(String, primary_key=True)     # which chunk (== Chunk.id)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+
+
 # Columns that may be missing on an older live `chunks` table. Maps column name
 # -> the type clause used in "ALTER TABLE chunks ADD COLUMN <name> <clause>".
 _CHUNK_COLUMN_MIGRATIONS = {
