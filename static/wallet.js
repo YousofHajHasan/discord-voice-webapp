@@ -89,6 +89,12 @@ function render() {
     ? `<div class="alias-value">${esc(w.cliq_alias)}</div>`
     : `<div class="alias-value empty">Not set yet — you'll add it on your first withdrawal.</div>`;
 
+  // Daily top-validator winnings (part of Earned) — only surfaced once you've won one.
+  const bonus = Number(w.bonus_usd) || 0;
+  const bonusCard = bonus > 0
+    ? `<div class="wallet-card"><div class="num">${fmtUsd(bonus)}</div><div class="lbl">👑 Daily bonuses</div></div>`
+    : '';
+
   const txns = w.transactions || [];
   const txnHtml = txns.length ? `
     <div class="txn-wrap"><table class="txn-table">
@@ -113,6 +119,7 @@ function render() {
 
     <div class="wallet-cards">
       <div class="wallet-card"><div class="num">${fmtUsd(w.earned_usd)}</div><div class="lbl">Earned (lifetime)</div></div>
+      ${bonusCard}
       <div class="wallet-card"><div class="num">${fmtUsd(w.paid_usd)}</div><div class="lbl">Paid out</div></div>
       <div class="wallet-card"><div class="num">${fmtDur(w.validated_seconds)}</div><div class="lbl">Audio validated</div></div>
     </div>

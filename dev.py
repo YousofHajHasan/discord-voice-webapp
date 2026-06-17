@@ -43,10 +43,14 @@ PORT         = int(os.environ.get("PORT", "8000"))
 # numeric-id folders and grant_access() only accepts numeric ids.
 TEAMMATE_ID = "100000000000000002"   # a delegate (validates the dev user's voices)
 ALICE_ID    = "100000000000000003"   # another owner (grants the dev user access)
+SAMI_ID     = "100000000000000004"   # competitor — validates the dev user's pool
+LINA_ID     = "100000000000000005"   # competitor — validates the dev user's pool
 DEV_USERS = {
     DEV_USER_ID: DEV_USERNAME,
     TEAMMATE_ID: "teammate",
     ALICE_ID:    "alice",
+    SAMI_ID:     "sami",
+    LINA_ID:     "lina",
 }
 
 # Env that the app modules read at import time. OAuth values are dummies because
@@ -258,6 +262,59 @@ def seed_wallet_demo():
     print("[dev] seeded wallet demo: localdev ~$8 (no alias, admin), teammate ~$12 (1 paid + 1 pending), alice ~$2 (below min)")
 
 
+def seed_bonus_demo():
+    """Crown a demo daily champion for YESTERDAY so the leaderboard champion banner +
+    the Wallet 'Daily bonuses' card are visible locally. Seeds a TIE (localdev +
+    teammate, $0.25 each) to also exercise the split + multi-winner UI. Idempotent.
+    Establishes the rate history + launch floor first, then writes the winner rows."""
+    import validation_db as vdb
+    from database import SessionLocal, DailyBonus
+    vdb.sync_pay_rate()
+    vdb.settle_daily_bonuses()   # records the launch floor (yesterday = no-winner)
+    y = (vdb._local_today() - timedelta(days=1)).isoformat()
+    with SessionLocal() as db:
+        if db.query(DailyBonus).filter(DailyBonus.local_date == y, DailyBonus.amount > 0).first():
+            return  # already crowned
+        for uid in (DEV_USER_ID, TEAMMATE_ID):
+            db.add(DailyBonus(local_date=y, user_id=uid, seconds=540.0, amount=0.25))
+        db.commit()
+    print(f"[dev] seeded daily-bonus champion (tie: {DEV_USERNAME} + teammate, $0.25 each) for {y}")
+
+
+def seed_competition():
+    """Multi-user DAILY-BONUS test rig you drive by hand. First-run only (idempotent
+    via a sami/lina grant marker, so restarting dev.py won't wipe your progress):
+    - Adds two competitor logins (sami, lina) who can validate the dev user's pool.
+    - Fattens the dev user's PENDING chunk durations to 120s, so validating ~3 clips
+      clears the 5-min bonus gate and each decision is worth visible $ (also makes a
+      non-retroactive rate change easy to see).
+    - Backdates ALL pre-seeded decisions to 3 days ago, so 'today' starts as a clean
+      slate the tester drives — and that seeded work counts as PRE-LAUNCH history that
+      earns its wage but NO daily bonus (demonstrating the launch floor)."""
+    from database import upsert_user, SessionLocal, Chunk
+    import validation_db as vdb
+    if vdb.can_access(LINA_ID, DEV_USER_ID):
+        return  # already set up
+    for uid in (SAMI_ID, LINA_ID):
+        upsert_user(uid, DEV_USERS[uid], DEV_AVATAR)
+        vdb.grant_access(DEV_USER_ID, uid)   # lets them validate the dev user's voices
+    with SessionLocal() as db:
+        # Fatten pending durations (accept/issue keep an existing non-None duration).
+        fattened = (db.query(Chunk)
+                    .filter(Chunk.discord_id == DEV_USER_ID,
+                            Chunk.validation_status == "pending",
+                            Chunk.is_deleted == False)
+                    .update({Chunk.duration: 120.0}, synchronize_session=False))
+        # Backdate every existing decision to 3 days ago (pre-launch history).
+        cutoff = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=3)
+        backdated = (db.query(Chunk)
+                     .filter(Chunk.validated_at.isnot(None))
+                     .update({Chunk.validated_at: cutoff}, synchronize_session=False))
+        db.commit()
+    print(f"[dev] seeded competition: +sami +lina (validate {DEV_USERNAME}'s pool); "
+          f"{fattened} pending chunks -> 120s; backdated {backdated} seeded decisions to 3d ago")
+
+
 def _install_broadcast_mock():
     """
     DEV-ONLY: make the admin "Broadcast a DM" feature fully clickable with NO real
@@ -318,6 +375,8 @@ def _setup_app():
     seed_users_and_grants()
     seed_decisions()
     seed_wallet_demo()
+    seed_competition()
+    seed_bonus_demo()
 
     default_user = {"id": DEV_USER_ID, "username": DEV_USERNAME, "avatar": DEV_AVATAR}
 
@@ -349,6 +408,64 @@ def _setup_app():
         resp.set_cookie("dev_uid", uid, max_age=604800, samesite="lax")
         return resp
 
+    # ── DEV-ONLY time/rate controls (bypass the clock to test bonuses + pricing) ──
+    @app_main.app.get("/dev/advance")
+    def _dev_advance(days: int = 1):
+        """Fast-forward `days` and settle daily bonuses for any now-complete day —
+        crowns winners without waiting for real midnight. Re-runnable (idempotent)."""
+        import validation_db as vdb
+        from database import SessionLocal, DailyBonus
+        now = datetime.now(timezone.utc) + timedelta(days=int(days))
+        n = vdb.settle_daily_bonuses(now=now)
+        with SessionLocal() as db:
+            wins = (db.query(DailyBonus).filter(DailyBonus.amount > 0)
+                    .order_by(DailyBonus.local_date.desc()).all())
+            winners = [{"date": w.local_date, "user": DEV_USERS.get(w.user_id, w.user_id),
+                        "amount": round(w.amount, 2), "minutes": round((w.seconds or 0) / 60, 1)}
+                       for w in wins]
+        return {"ok": True, "advanced_days": int(days), "days_settled_this_call": n, "winners": winners}
+
+    @app_main.app.get("/dev/setrate")
+    def _dev_setrate(rate: float):
+        """Change the pay rate NOW (append a pay_rates row). Non-retroactive: existing
+        work keeps its old rate; only work validated after this earns `rate`."""
+        from database import SessionLocal, PayRate
+        now = datetime.now(timezone.utc).replace(tzinfo=None)
+        with SessionLocal() as db:
+            db.add(PayRate(effective_from=now, rate_per_hour=float(rate)))
+            db.commit()
+            rows = db.query(PayRate).order_by(PayRate.effective_from.asc()).all()
+            hist = [{"from": r.effective_from.isoformat(), "rate_per_hour": r.rate_per_hour} for r in rows]
+        return {"ok": True, "new_rate_per_hour": float(rate), "history": hist}
+
+    @app_main.app.get("/dev/rates")
+    def _dev_rates():
+        """The pay-rate history + each demo user's current earnings (work + bonus)."""
+        import validation_db as vdb
+        from database import SessionLocal, PayRate
+        with SessionLocal() as db:
+            rows = db.query(PayRate).order_by(PayRate.effective_from.asc()).all()
+            hist = [{"from": r.effective_from.isoformat(), "rate_per_hour": r.rate_per_hour} for r in rows]
+        earned = {}
+        for uid, name in DEV_USERS.items():
+            w = vdb.get_wallet(uid)
+            earned[name] = {"earned_usd": w["earned_usd"], "bonus_usd": w["bonus_usd"],
+                            "validated_min": round(w["validated_seconds"] / 60, 1)}
+        return {"rate_history": hist, "earned": earned}
+
+    @app_main.app.get("/dev/reset-bonuses")
+    def _dev_reset_bonuses():
+        """Wipe daily_bonuses so you can re-run the bonus scenario. Immediately
+        re-floors at the REAL yesterday (so a following /dev/advance?days=1 settles —
+        and crowns — TODAY again). Leaves validations + the rate history untouched."""
+        import validation_db as vdb
+        from database import SessionLocal, DailyBonus
+        with SessionLocal() as db:
+            n = db.query(DailyBonus).delete()
+            db.commit()
+        vdb.settle_daily_bonuses()   # re-establish the launch floor at real-yesterday
+        return {"ok": True, "deleted_bonus_rows": n}
+
     return app_main.app
 
 
@@ -375,6 +492,32 @@ def main():
     print(f"     Admin Payouts: {base}/validate/admin  (teammate has a pending request to approve/reject).")
     print(f"  ── Broadcast: {base}/validate/admin  →  '📣 Compose broadcast'")
     print("     Sends are SIMULATED in dev (no real DMs): some ✅, some ❌, watch live progress + history.")
+    print(f"  ── Leaderboard: {base}/validate/leaderboard  (👑 champion banner; on first")
+    print(f"     load a seeded tie {DEV_USERNAME}+teammate. Wallet shows a 'Daily bonuses' card.)")
+    print("  ┌─ TEST THE NEW FEATURES (daily bonus + non-retroactive rate) ─────")
+    print("  │ Log in as (open each in its OWN browser / incognito window):")
+    print(f"  │   localdev : {base}/dev/as/{DEV_USER_ID}")
+    print(f"  │   teammate : {base}/dev/as/{TEAMMATE_ID}")
+    print(f"  │   sami     : {base}/dev/as/{SAMI_ID}")
+    print(f"  │   lina     : {base}/dev/as/{LINA_ID}")
+    print(f"  │   alice    : {base}/dev/as/{ALICE_ID}")
+    print("  │")
+    print("  │ DAILY BONUS — top validator/day wins $0.50 (split on tie, ≥5-min gate):")
+    print("  │   'today' starts EMPTY (seeded work was backdated 3 days = pre-launch).")
+    print("  │   1) As sami, validate 3+ clips (each 120s → clears the 5-min gate);")
+    print("  │      as lina, validate some too. Watch the leaderboard 'Today' tab fill.")
+    print(f"  │   2) End the day:   {base}/dev/advance?days=1")
+    print("  │      → settles 'today'; the champion banner shows the winner.")
+    print("  │      • equal minutes for two users → they SPLIT (each $0.25)")
+    print("  │      • everyone under 5 min        → no winner that day")
+    print(f"  │   3) Re-test:       {base}/dev/reset-bonuses   then validate + advance again")
+    print("  │")
+    print("  │ NON-RETROACTIVE RATE — old work keeps its rate; only new work re-prices:")
+    print(f"  │   1) See earnings:  {base}/dev/rates   (localdev ~$8 from backdated work)")
+    print(f"  │   2) Bump rate:     {base}/dev/setrate?rate=80")
+    print("  │   3) As localdev, validate a couple MORE clips (these earn $80/hr).")
+    print(f"  │   4) {base}/dev/rates  → the old $8 stays $8; only the new clips use $80.")
+    print("  └──────────────────────────────────────────────────────────────────")
     print("=" * 66 + "\n")
 
     import uvicorn

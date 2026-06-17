@@ -23,6 +23,24 @@
                     border-radius: 14px; padding: 14px 18px; margin-bottom: 22px; font-size: 13px; color: var(--muted); }
         .lb-total b { font-family: 'Syne', sans-serif; color: var(--text); font-size: 15px; }
 
+        /* Reigning daily champion(s) */
+        .lb-champ { display: flex; align-items: center; gap: 14px; margin-bottom: 22px; padding: 14px 18px;
+                    border-radius: 14px; border: 1px solid rgba(234,179,8,0.45);
+                    background: linear-gradient(135deg, rgba(234,179,8,0.13), var(--surface-2)); }
+        .lb-champ.you { box-shadow: inset 0 0 0 1px var(--gold); }
+        .lb-champ .ch-crown { font-size: 24px; line-height: 1; flex-shrink: 0; }
+        .lb-champ .ch-avas { display: flex; flex-shrink: 0; }
+        .lb-champ .ch-ava { width: 38px; height: 38px; border-radius: 50%; object-fit: cover;
+                            border: 2px solid var(--gold); margin-left: -10px; background: var(--surface); }
+        .lb-champ .ch-ava:first-child { margin-left: 0; }
+        .lb-champ .ch-txt { flex: 1; min-width: 0; }
+        .lb-champ .ch-title { font-size: 10px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); }
+        .lb-champ .ch-name { font-family: 'Syne', sans-serif; font-weight: 700; font-size: 15px; color: var(--text);
+                             overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-top: 2px; }
+        .lb-champ .ch-name .you-tag { position: static; margin-left: 8px; }
+        .lb-champ .ch-prize { flex-shrink: 0; font-family: 'Syne', sans-serif; font-weight: 800; font-size: 16px;
+                              color: var(--gold); text-align: right; white-space: nowrap; }
+
         /* Podium */
         .podium { display: flex; align-items: flex-end; justify-content: center; gap: 12px; margin: 8px 0 26px; }
         .spot { flex: 1 1 0; max-width: 180px; background: var(--surface); border: 1px solid var(--border);
@@ -91,7 +109,7 @@
 
 <main>
     <h1 class="page-title">Leaderboard</h1>
-    <p class="lb-sub">Ranked by minutes of audio you've validated — the same work the Wallet pays for. Climb the board, earn more. May the best grinder win. 🏆</p>
+    <p class="lb-sub">Ranked by minutes of audio you've validated — the same work the Wallet pays for. The top validator each day wins a <b>$0.50</b> bonus (split on a tie). Climb the board, earn more. 🏆</p>
 
     <div class="lb-tabs" id="lb-tabs">
         <button class="lb-tab active" data-window="today">Today</button>

@@ -112,6 +112,12 @@ def _scan_and_register_all_chunks():
 @app.on_event("startup")
 async def startup():
     init_db()
+    # Record the current pay rate in the (non-retroactive) history, and settle any
+    # daily bonuses for days that completed while we were down.
+    vdb.sync_pay_rate()
+    settled = vdb.settle_daily_bonuses()
+    if settled:
+        logger.info(f"Startup: settled daily bonuses for {settled} day(s)")
     # Chunk registration runs in the background thread (immediate first pass), so
     # the server accepts connections right away even with a huge, network-mounted
     # recordings volume — instead of blocking startup on a full disk scan.

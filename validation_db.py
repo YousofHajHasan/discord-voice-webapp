@@ -16,11 +16,13 @@ Status model (Chunk.validation_status):
 """
 import os
 import json
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, date, timezone, timedelta
 
 from sqlalchemy import or_, and_, update, select, func, case
+from sqlalchemy.exc import IntegrityError
 from database import (
     SessionLocal, Chunk, AccessGrant, Admin, User, Withdrawal, PayoutProfile, Broadcast, Skip,
+    PayRate, DailyBonus,
     _resolve_filepath, measure_chunk_duration, trim_wav, RECORDINGS_PATH,
     VALIDATION_LEASE_MINUTES, LABEL_KEYS, LABEL_NORMAL_KEY,
 )
@@ -43,6 +45,14 @@ MIN_WITHDRAWAL_USD = float(os.environ.get("MIN_WITHDRAWAL_USD", "5"))
 PAID_STATUSES = ["verified", "rejected", "issue"]
 # Withdrawal statuses whose amount is "spent" (subtracted from available).
 SPENT_WITHDRAWAL_STATUSES = ["pending", "paid"]
+
+# Daily top-validator bonus (gamification): the validator(s) with the most validated
+# audio in a completed LOCAL day who clear the minimum share this amount (split on a
+# tie). All env-tunable like PAY_PER_HOUR; the awarded amount is snapshotted per day
+# so changing it later never rewrites past wins. See settle_daily_bonuses().
+DAILY_BONUS_AMOUNT = float(os.environ.get("DAILY_BONUS_AMOUNT", "0.5"))
+DAILY_BONUS_MIN_MINUTES = float(os.environ.get("DAILY_BONUS_MIN_MINUTES", "5"))
+DAILY_BONUS_MIN_SECONDS = DAILY_BONUS_MIN_MINUTES * 60.0
 
 # ── Content-classification taxonomy ───────────────────────────────────────────
 # Single source of truth for the validator's label chips: key (== DB column ==
@@ -783,6 +793,89 @@ def _validated_seconds(db, user_id: str) -> float:
     return float(secs or 0.0)
 
 
+def sync_pay_rate():
+    """
+    Reconcile the PAY_PER_HOUR env var into the append-only pay_rates history. Run
+    once on boot (after init_db). Empty table -> seed one row effective at the epoch,
+    so ALL existing work is valued at the current rate and today's wallets don't move.
+    Otherwise, if PAY_PER_HOUR differs from the latest recorded rate (you changed it
+    and redeployed), append a new row effective NOW — making the change non-retroactive:
+    only work validated after this instant earns the new rate.
+    """
+    with SessionLocal() as db:
+        latest = (
+            db.query(PayRate)
+            .order_by(PayRate.effective_from.desc(), PayRate.id.desc())
+            .first()
+        )
+        if latest is None:
+            db.add(PayRate(effective_from=datetime(1970, 1, 1), rate_per_hour=PAY_PER_HOUR))
+            db.commit()
+        elif abs(float(latest.rate_per_hour) - PAY_PER_HOUR) > 1e-9:
+            now = datetime.now(timezone.utc).replace(tzinfo=None)
+            db.add(PayRate(effective_from=now, rate_per_hour=PAY_PER_HOUR))
+            db.commit()
+
+
+def _rate_intervals(db):
+    """Pay-rate history as ordered (start, end, rate_per_hour) intervals; `end` is
+    None for the rate currently in force. Falls back to live PAY_PER_HOUR if the table
+    is somehow empty (pre-sync), so earnings never silently zero out."""
+    rates = (
+        db.query(PayRate)
+        .order_by(PayRate.effective_from.asc(), PayRate.id.asc())
+        .all()
+    )
+    if not rates:
+        return [(datetime(1970, 1, 1), None, PAY_PER_HOUR)]
+    out = []
+    for i, r in enumerate(rates):
+        end = rates[i + 1].effective_from if i + 1 < len(rates) else None
+        out.append((r.effective_from, end, float(r.rate_per_hour)))
+    return out
+
+
+def _validated_earnings(db, user_id: str) -> float:
+    """USD earned from validated audio, valuing each chunk at the rate in force when it
+    was validated (validated_at). Chunks with no validated_at fall in the earliest
+    interval so legacy rows are never dropped. With a single rate (the common case)
+    this equals total_seconds * rate — identical to the old flat calculation."""
+    total = 0.0
+    intervals = _rate_intervals(db)
+    for idx, (start, end, rate) in enumerate(intervals):
+        q = db.query(func.coalesce(func.sum(func.coalesce(Chunk.duration, 0.0)), 0.0)).filter(
+            Chunk.validated_by == user_id,
+            Chunk.is_deleted == False,
+            Chunk.validation_status.in_(PAID_STATUSES),
+        )
+        if idx == 0:
+            # Earliest interval owns everything before `end`, incl. NULL validated_at.
+            if end is not None:
+                q = q.filter(or_(Chunk.validated_at < end, Chunk.validated_at.is_(None)))
+        else:
+            q = q.filter(Chunk.validated_at >= start)
+            if end is not None:
+                q = q.filter(Chunk.validated_at < end)
+        total += float(q.scalar() or 0.0) * (rate / 3600.0)
+    return total
+
+
+def _bonus_usd(db, user_id: str) -> float:
+    """Total daily-bonus dollars awarded to this user (sentinel rows use user_id='' so
+    they never match a real user)."""
+    amt = (
+        db.query(func.coalesce(func.sum(DailyBonus.amount), 0.0))
+        .filter(DailyBonus.user_id == user_id)
+        .scalar()
+    )
+    return float(amt or 0.0)
+
+
+def _earned_usd(db, user_id: str) -> float:
+    """Lifetime earnings: rate-aware validated work + daily bonuses, USD to cents."""
+    return round(_validated_earnings(db, user_id) + _bonus_usd(db, user_id), 2)
+
+
 def _withdrawn_usd(db, user_id: str) -> float:
     """Dollars locked by the user's pending + paid withdrawals (rejected frees up)."""
     amt = (
@@ -814,8 +907,11 @@ def get_wallet(user_id: str) -> dict:
     available now, the CliQ alias on file, and their withdrawal history. All money
     in USD rounded to cents; durations in seconds (the frontend formats them).
     """
+    settle_daily_bonuses()
     with SessionLocal() as db:
         secs = _validated_seconds(db, user_id)
+        work_usd = _validated_earnings(db, user_id)
+        bonus_usd = _bonus_usd(db, user_id)
         withdrawn = _withdrawn_usd(db, user_id)
         paid = (
             db.query(func.coalesce(func.sum(Withdrawal.amount_usd), 0.0))
@@ -836,11 +932,12 @@ def get_wallet(user_id: str) -> dict:
         profile = db.get(PayoutProfile, user_id)
         alias = profile.cliq_alias if profile else None
 
-    earned = round(secs * PAY_RATE_PER_SEC, 2)
+    earned = round(work_usd + bonus_usd, 2)
     available = round(max(0.0, earned - withdrawn), 2)
     return {
         "validated_seconds": secs,
         "earned_usd": earned,
+        "bonus_usd": round(bonus_usd, 2),
         "withdrawn_usd": round(withdrawn, 2),
         "paid_usd": round(float(paid or 0.0), 2),
         "available_usd": available,
@@ -892,13 +989,14 @@ def request_withdrawal(user_id: str):
     The amount + alias are snapshotted onto the row at creation time.
     """
     result = "ok"
+    settle_daily_bonuses()
     with SessionLocal() as db:
         has_pending = db.query(Withdrawal).filter(
             Withdrawal.user_id == user_id, Withdrawal.status == "pending"
         ).first() is not None
-        secs = _validated_seconds(db, user_id)
+        secs = _validated_seconds(db, user_id)   # validated-audio provenance for the row
         withdrawn = _withdrawn_usd(db, user_id)
-        earned = round(secs * PAY_RATE_PER_SEC, 2)
+        earned = _earned_usd(db, user_id)
         available = round(max(0.0, earned - withdrawn), 2)
         profile = db.get(PayoutProfile, user_id)
         alias = profile.cliq_alias if profile else None
@@ -1099,6 +1197,125 @@ def _window_start_utc(window: str):
     return base - offset                                # back to naive UTC
 
 
+def _local_today(now=None) -> date:
+    """Today's date in Jordan-local time (the day 'today' on the board refers to)."""
+    now = now or datetime.now(timezone.utc)
+    naive_utc = now.replace(tzinfo=None) if now.tzinfo else now
+    return (naive_utc + timedelta(hours=LEADERBOARD_UTC_OFFSET_HOURS)).date()
+
+
+def _local_day_bounds_utc(d: date):
+    """[start, end) naive-UTC datetimes spanning the local day `d` (Jordan time) — to
+    compare directly against the naive-UTC Chunk.validated_at."""
+    offset = timedelta(hours=LEADERBOARD_UTC_OFFSET_HOURS)
+    start_local = datetime(d.year, d.month, d.day)
+    return start_local - offset, start_local + timedelta(days=1) - offset
+
+
+def _settle_one_day(db, d: date) -> None:
+    """Award (or mark no-winner) the daily bonus for the COMPLETED local day `d`.
+    Top validator(s) by validated audio that day who clear the minute gate share
+    DAILY_BONUS_AMOUNT, split on an exact (whole-second) tie. Idempotent via the
+    (local_date, user_id) PK: a racing settler just hits IntegrityError and rolls back."""
+    d_iso = d.isoformat()
+    if db.query(DailyBonus.local_date).filter(DailyBonus.local_date == d_iso).first():
+        return  # already settled
+    start_utc, end_utc = _local_day_bounds_utc(d)
+    rows = (
+        db.query(
+            Chunk.validated_by.label("uid"),
+            func.coalesce(func.sum(Chunk.duration), 0.0).label("secs"),
+        )
+        .filter(
+            Chunk.validated_by.isnot(None),
+            Chunk.is_deleted == False,
+            Chunk.validation_status.in_(PAID_STATUSES),
+            Chunk.validated_at >= start_utc,
+            Chunk.validated_at < end_utc,
+        )
+        .group_by(Chunk.validated_by)
+        .all()
+    )
+    winners = []
+    if rows:
+        top = max(float(r.secs or 0.0) for r in rows)
+        if top >= DAILY_BONUS_MIN_SECONDS:
+            # Whole-second equality counts as a tie (float sums won't match exactly).
+            winners = [r for r in rows if round(float(r.secs or 0.0)) == round(top)]
+    try:
+        if winners:
+            share = round(DAILY_BONUS_AMOUNT / len(winners), 2)
+            for r in winners:
+                db.add(DailyBonus(local_date=d_iso, user_id=r.uid,
+                                  seconds=round(float(r.secs or 0.0), 1), amount=share))
+        else:
+            db.add(DailyBonus(local_date=d_iso, user_id="", seconds=0.0, amount=0.0))
+        db.commit()
+    except IntegrityError:
+        db.rollback()   # another settler beat us to this day — fine
+
+
+def settle_daily_bonuses(now=None) -> int:
+    """Settle every COMPLETED local day not yet settled, up to yesterday. Cheap no-op
+    once caught up (one max() query). On the very first run it records yesterday as a
+    no-winner boundary so days BEFORE launch are never paid — bonuses start from today.
+    Safe to call on boot and lazily from the wallet / leaderboard. Returns days settled."""
+    today = _local_today(now)
+    with SessionLocal() as db:
+        last = db.query(func.max(DailyBonus.local_date)).scalar()
+        if last is None:
+            # Launch floor: mark yesterday settled-no-winner without paying, so we
+            # never walk back into historical data.
+            boundary = (today - timedelta(days=1)).isoformat()
+            try:
+                db.add(DailyBonus(local_date=boundary, user_id="", seconds=0.0, amount=0.0))
+                db.commit()
+            except IntegrityError:
+                db.rollback()
+            last = boundary
+    start_day = date.fromisoformat(last) + timedelta(days=1)
+    yesterday = today - timedelta(days=1)
+    settled = 0
+    d = start_day
+    while d <= yesterday:                       # only days that are fully over
+        with SessionLocal() as db:
+            _settle_one_day(db, d)
+        settled += 1
+        d += timedelta(days=1)
+    return settled
+
+
+def _latest_champions(db):
+    """The most recent settled day that produced winner(s), with names/avatars — the
+    reigning leaderboard champion(s). None until someone has won a day."""
+    d_iso = (
+        db.query(func.max(DailyBonus.local_date))
+        .filter(DailyBonus.amount > 0, DailyBonus.user_id != "")
+        .scalar()
+    )
+    if not d_iso:
+        return None
+    rows = (
+        db.query(DailyBonus)
+        .filter(DailyBonus.local_date == d_iso, DailyBonus.amount > 0)
+        .all()
+    )
+    ids = [r.user_id for r in rows]
+    users = {u.discord_id: u for u in db.query(User).filter(User.discord_id.in_(ids)).all()} if ids else {}
+    winners = []
+    for r in rows:
+        u = users.get(r.user_id)
+        winners.append({
+            "id": r.user_id,
+            "name": (u.username if u else None) or r.user_id,
+            "avatar": (u.avatar_url if u else None),
+            "amount": round(float(r.amount or 0.0), 2),
+            "seconds": round(float(r.seconds or 0.0), 1),
+        })
+    winners.sort(key=lambda w: w["seconds"], reverse=True)
+    return {"date": d_iso, "winners": winners, "tie": len(winners) > 1}
+
+
 def has_validated(user_id: str) -> bool:
     """Leaderboard view-gate: has this user made at least one decision (lifetime)?
     Any decision counts (accept/reject/issue) — same basis as the score — so only
@@ -1119,6 +1336,7 @@ def get_leaderboard(window: str, viewer_id: str) -> dict:
     """
     if window not in LEADERBOARD_WINDOWS:
         window = "today"
+    settle_daily_bonuses()
     start = _window_start_utc(window)
 
     with SessionLocal() as db:
@@ -1139,6 +1357,7 @@ def get_leaderboard(window: str, viewer_id: str) -> dict:
             {u.discord_id: u for u in db.query(User).filter(User.discord_id.in_(ids)).all()}
             if ids else {}
         )
+        champion = _latest_champions(db)
 
     # Rank by audio time, then chunk count as the tiebreaker.
     rows.sort(key=lambda r: (float(r.seconds or 0.0), int(r.chunks or 0)), reverse=True)
@@ -1162,4 +1381,5 @@ def get_leaderboard(window: str, viewer_id: str) -> dict:
         "participants": len(entries),
         "total_seconds": round(sum(e["seconds"] for e in entries), 1),
         "total_chunks": sum(e["chunks"] for e in entries),
+        "champion": champion,
     }

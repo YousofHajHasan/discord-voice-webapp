@@ -30,6 +30,36 @@ function fmtTime(seconds) {
 function fmtChunks(n) { n = Number(n) || 0; return `${n.toLocaleString()} clip${n === 1 ? '' : 's'}`; }
 const avatarOf = (e) => e.avatar || DEFAULT_AVATAR;
 
+// 'YYYY-MM-DD' -> 'Jun 16' (the day a champion was crowned).
+function fmtDate(iso) {
+  const p = String(iso || '').split('-').map(Number);
+  if (p.length !== 3 || !p[0]) return iso || '';
+  const mon = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'][p[1] - 1] || '';
+  return `${mon} ${p[2]}`;
+}
+
+// Reigning champion banner — the most recent day that produced a winner. One winner
+// takes the full bonus; an exact tie splits it (the server already divided the amount).
+function championHtml(champ) {
+  if (!champ || !champ.winners || !champ.winners.length) return '';
+  const ws = champ.winners;
+  const each = Number(ws[0].amount) || 0;
+  const youWon = ws.some((w) => w.id === ME);
+  const avas = ws.slice(0, 3).map((w) =>
+    `<img class="ch-ava" src="${esc(w.avatar || DEFAULT_AVATAR)}" onerror="this.src='${DEFAULT_AVATAR}'" alt="">`).join('');
+  const names = ws.map((w) => esc(w.name)).join(' & ');
+  const prize = ws.length === 1 ? `+$${each.toFixed(2)}` : `split $${(each * ws.length).toFixed(2)}`;
+  return `<div class="lb-champ${youWon ? ' you' : ''}">
+    <div class="ch-crown">👑</div>
+    <div class="ch-avas">${avas}</div>
+    <div class="ch-txt">
+      <div class="ch-title">${ws.length > 1 ? 'Daily champions' : 'Daily champion'} · ${fmtDate(champ.date)}</div>
+      <div class="ch-name">${names}${youWon ? '<span class="you-tag">you</span>' : ''}</div>
+    </div>
+    <div class="ch-prize">${prize}</div>
+  </div>`;
+}
+
 async function getJSON(url) {
   const res = await fetch(url);
   if (!res.ok) throw new Error('request failed (' + res.status + ')');
@@ -95,9 +125,11 @@ function youBarHtml(data) {
 function render(data) {
   if (data.eligible === false) { boardEl.innerHTML = lockedHtml(); return; }
 
+  const champ = championHtml(data.champion);
   const entries = data.entries || [];
   if (!entries.length) {
-    boardEl.innerHTML = `<div class="lb-empty">No one has validated ${WINDOW_LABEL[data.window] || 'yet'} — be the first on the board! 🚀</div>`
+    boardEl.innerHTML = champ
+      + `<div class="lb-empty">No one has validated ${WINDOW_LABEL[data.window] || 'yet'} — be the first on the board! 🚀</div>`
       + youBarHtml(data);
     return;
   }
@@ -110,7 +142,7 @@ function render(data) {
   const podium = podiumHtml(top);
   const list = rest.length ? `<div class="lb-list">${rest.map(rowHtml).join('')}</div>` : '';
 
-  boardEl.innerHTML = total + podium + list + youBarHtml(data);
+  boardEl.innerHTML = champ + total + podium + list + youBarHtml(data);
 }
 
 async function load(win) {

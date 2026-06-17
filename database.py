@@ -254,6 +254,53 @@ class Skip(Base):
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
 
+class PayRate(Base):
+    """
+    The pay-rate history (USD per hour of validated audio). Append-only: each row is
+    a rate that takes effect at `effective_from` and stays in force until the next
+    row's `effective_from`. Earnings value each validated chunk at the rate in force
+    when it was validated (validation_db._validated_earnings), so a rate change is
+    NON-retroactive — past work keeps the rate it was earned at.
+
+    Bootstrapped from the PAY_PER_HOUR env var on boot (validation_db.sync_pay_rate):
+    an empty table is seeded with one row effective at the epoch, so ALL existing work
+    is valued at the current rate and today's wallets don't move; thereafter changing
+    PAY_PER_HOUR + redeploying appends a new row effective `now`. NEW table create_all()
+    makes on first boot — no migration.
+    """
+    __tablename__ = "pay_rates"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    effective_from = Column(DateTime, nullable=False)        # naive UTC; rate applies from here on
+    rate_per_hour = Column(Float, nullable=False)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+
+
+class DailyBonus(Base):
+    """
+    A settled daily top-validator bonus (gamification). Each completed LOCAL (Jordan)
+    day is settled exactly once (validation_db.settle_daily_bonuses): the validator(s)
+    with the most validated audio that day who cleared the DAILY_BONUS_MIN_MINUTES gate
+    get DAILY_BONUS_AMOUNT, SPLIT evenly on an exact tie. The awarded `amount` is
+    snapshotted per row, so changing the bonus later never rewrites past days (mirrors
+    how Withdrawal freezes its amount).
+
+    One row per (local_date, user_id); the composite PK makes settlement idempotent —
+    re-running can't double-pay a day. A day with no qualifying winner still gets a
+    single sentinel row (user_id="", amount=0) so it's marked settled and never
+    recomputed; this is also how the launch FLOOR is set (the first ever run records
+    yesterday as a no-winner boundary, so history before launch is never paid). NEW
+    table create_all() makes on first boot — no migration.
+    """
+    __tablename__ = "daily_bonuses"
+
+    local_date = Column(String, primary_key=True)   # 'YYYY-MM-DD' in Jordan local time
+    user_id = Column(String, primary_key=True)       # winner discord_id; "" = settled, no winner
+    seconds = Column(Float, nullable=False, default=0.0)   # winner's validated audio that day
+    amount = Column(Float, nullable=False, default=0.0)    # USD awarded to THIS user (post-split)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+
+
 # Columns that may be missing on an older live `chunks` table. Maps column name
 # -> the type clause used in "ALTER TABLE chunks ADD COLUMN <name> <clause>".
 _CHUNK_COLUMN_MIGRATIONS = {
