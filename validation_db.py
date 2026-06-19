@@ -15,7 +15,6 @@ Status model (Chunk.validation_status):
                it's hidden from the queue and the dashboard.
 """
 import os
-import re
 import json
 from datetime import datetime, date, timezone, timedelta
 
@@ -477,83 +476,6 @@ def remove_admin(target_id: str) -> str:
         if db.query(Admin).count() <= 1:
             return "last"
         db.delete(row)
-        db.commit()
-    return "ok"
-
-
-# ── Admin: transcript fixes ───────────────────────────────────────────────────
-# A pure-text correction path, SEPARATE from the validation pipeline. The admin
-# pastes a list of chunk file paths; we look each up and let them edit ONLY the
-# verified_transcription (the human-confirmed/dataset text). This deliberately
-# does NOT touch validation_status, validated_by/at, duration, labels, the wallet
-# or the leaderboard — it is an edit, never a (re-)decision. Chunks must already
-# be decided to appear here; we just surface them and overwrite the text.
-
-# Pulls "<discord_id>/chunks/<YYYY-MM-DD>/<filename>.wav" out of any path the admin
-# pastes (absolute /app/... on prod, /home/yousof/vps/... locally, or just the tail
-# — only the trailing shape matters, so a leading prefix is irrelevant).
-_CHUNK_PATH_RE = re.compile(
-    r"(?P<owner>\d{15,20})/chunks/(?P<date>\d{4}-\d{2}-\d{2})/(?P<filename>[^/]+\.wav)\s*$"
-)
-
-
-def parse_chunk_path(path: str):
-    """(owner_id, date, filename) for a pasted chunk path, or None if it doesn't
-    match the expected shape. Identity-only — does not touch the DB or disk."""
-    m = _CHUNK_PATH_RE.search((path or "").strip())
-    if not m:
-        return None
-    return m.group("owner"), m.group("date"), m.group("filename")
-
-
-def lookup_chunks_for_fix(paths) -> list:
-    """Resolve a list of pasted chunk paths to their current rows, order preserved.
-
-    Each item: {input, owner_id, date, filename, found, status, is_deleted,
-    verified_transcription, transcription}. `found=False` (with a `reason`) when
-    the path is malformed or no such chunk exists, so the UI can flag it instead
-    of silently dropping it. Read-only.
-    """
-    out = []
-    with SessionLocal() as db:
-        for raw in paths:
-            raw = (raw or "").strip()
-            if not raw:
-                continue
-            parsed = parse_chunk_path(raw)
-            if not parsed:
-                out.append({"input": raw, "found": False, "reason": "unrecognized path"})
-                continue
-            owner_id, d, filename = parsed
-            row = db.get(Chunk, f"{owner_id}:{d}:{filename}")
-            if not row:
-                out.append({"input": raw, "owner_id": owner_id, "date": d,
-                            "filename": filename, "found": False, "reason": "no such chunk"})
-                continue
-            out.append({
-                "input": raw,
-                "owner_id": owner_id,
-                "date": d,
-                "filename": filename,
-                "found": True,
-                "status": row.validation_status or "pending",
-                "is_deleted": bool(row.is_deleted),
-                "verified_transcription": row.verified_transcription,
-                "transcription": row.transcription,
-            })
-    return out
-
-
-def admin_set_verified_transcription(owner_id: str, date: str, filename: str, text: str) -> str:
-    """Overwrite ONLY a chunk's verified_transcription. No status/validator/wallet
-    side effects — this is an admin text correction, not a decision. Returns
-    'ok' | 'notfound'. Empty string is a legal value (clears the text)."""
-    chunk_id = f"{owner_id}:{date}:{filename}"
-    with SessionLocal() as db:
-        row = db.get(Chunk, chunk_id)
-        if not row:
-            return "notfound"
-        row.verified_transcription = text
         db.commit()
     return "ok"
 
