@@ -186,7 +186,7 @@ async def callback(request: Request, code: str = None, error: str = None):
 
 
 @app.get("/dashboard", response_class=HTMLResponse)
-async def dashboard(request: Request):
+def dashboard(request: Request):
     user = get_current_user(request)
     if not user:
         return RedirectResponse("/recordings/")
@@ -267,10 +267,12 @@ async def serve_chunk(user_id: str, date: str, filename: str, request: Request):
 # ── Dashboard chunk poll (Discord session auth) ───────────────────────────────
 
 @app.get("/api/chunks/{user_id}")
-async def api_chunks(user_id: str, request: Request):
+def api_chunks(user_id: str, request: Request):
     """
     Returns the current chunks_per_date dict for a user as JSON.
     Reads from DB only — disk scanning is handled by the background thread.
+    Sync (not async) on purpose: it runs in the threadpool so a heavy read can
+    never block the event loop / every other request, the way it used to.
     """
     current_user = get_current_user(request)
     if not current_user:
