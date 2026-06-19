@@ -108,6 +108,21 @@ async def admin_page(request: Request):
     )
 
 
+@router.get("/validate/admin/transcripts", response_class=HTMLResponse)
+async def transcripts_fix_page(request: Request):
+    """Admin-only transcript correction tool: paste chunk paths, listen, and edit
+    each clip's verified_transcription directly — a pure text edit, NOT a
+    (re-)validation (see vdb.admin_set_verified_transcription)."""
+    user = get_current_user(request)
+    if not user:
+        return RedirectResponse("/recordings/")
+    if not vdb.is_admin(user["id"]):
+        return RedirectResponse("/recordings/validate/submissions")
+    return templates.TemplateResponse(
+        "transcripts.html", {"request": request, "user": user, "is_admin": True}
+    )
+
+
 @router.get("/validate/wallet", response_class=HTMLResponse)
 async def wallet_page(request: Request):
     """The validator's earnings + withdrawal page. Any logged-in user; every
@@ -301,6 +316,42 @@ async def api_admin_stats(request: Request):
     """Whole-dataset + per-owner verified/remaining counts and audio totals."""
     _require_admin(request)
     return vdb.get_dataset_stats()
+
+
+@router.post("/validate/api/admin/transcripts/lookup")
+async def api_admin_transcripts_lookup(request: Request):
+    """Resolve a pasted list of chunk paths to their current rows (order kept).
+    Read-only — surfaces each clip's verified_transcription for editing."""
+    _require_admin(request)
+    body = await request.json()
+    raw = body.get("paths")
+    if isinstance(raw, str):
+        raw = raw.splitlines()
+    if not isinstance(raw, list):
+        raise HTTPException(status_code=400, detail="Send `paths` as a list or newline-separated string.")
+    return {"items": vdb.lookup_chunks_for_fix(raw)}
+
+
+@router.post("/validate/api/admin/transcripts/save")
+async def api_admin_transcripts_save(request: Request):
+    """Overwrite ONE chunk's verified_transcription. Pure text edit: no status,
+    validator, duration, wallet, or leaderboard side effects."""
+    _require_admin(request)
+    body = await request.json()
+    owner_id = str(body.get("owner_id", "")).strip()
+    date = str(body.get("date", "")).strip()
+    filename = str(body.get("filename", "")).strip()
+    if not (owner_id and date and filename):
+        raise HTTPException(status_code=400, detail="owner_id, date and filename are required.")
+    _safe(owner_id, date, filename)
+    # `text` may be any string, including empty (an explicit clear). Reject only a
+    # missing field so an accidental empty body can't blank a transcript.
+    if "text" not in body:
+        raise HTTPException(status_code=400, detail="`text` is required.")
+    result = vdb.admin_set_verified_transcription(owner_id, date, filename, str(body.get("text") or ""))
+    if result == "notfound":
+        raise HTTPException(status_code=404, detail="No such chunk.")
+    return {"ok": True}
 
 
 @router.get("/validate/api/admin/admins")
