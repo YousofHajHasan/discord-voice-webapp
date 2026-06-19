@@ -12,7 +12,7 @@ from pathlib import Path
 from auth import get_discord_oauth_url, exchange_code, get_discord_user
 from database import (
     init_db, upsert_user, log_audio_file,
-    bulk_register_chunks, get_chunks_for_user, delete_chunk,
+    bulk_register_chunks, get_chunks_for_user, get_chunk_dates_for_user, delete_chunk,
     get_pending_chunks, claim_chunks, set_transcription, release_stale_claims,
     release_stale_validation_claims, backfill_durations,
 )
@@ -267,12 +267,16 @@ async def serve_chunk(user_id: str, date: str, filename: str, request: Request):
 # ── Dashboard chunk poll (Discord session auth) ───────────────────────────────
 
 @app.get("/api/chunks/{user_id}")
-def api_chunks(user_id: str, request: Request):
+def api_chunks(user_id: str, request: Request, date: str | None = None):
     """
-    Returns the current chunks_per_date dict for a user as JSON.
+    Returns the chunks_per_date dict for a user as JSON.
     Reads from DB only — disk scanning is handled by the background thread.
     Sync (not async) on purpose: it runs in the threadpool so a heavy read can
     never block the event loop / every other request, the way it used to.
+
+    No `date` -> the recent live feed (bounded window, polled every 10s).
+    `?date=YYYY-MM-DD` -> just that one older day, fetched on demand when its
+    filter pill is clicked (a small fixed slice, never polled).
     """
     current_user = get_current_user(request)
     if not current_user:
@@ -280,8 +284,24 @@ def api_chunks(user_id: str, request: Request):
     if current_user["id"] != user_id:
         raise HTTPException(status_code=403, detail="Forbidden")
 
-    chunks_per_date = get_chunks_for_user(user_id)
+    chunks_per_date = get_chunks_for_user(user_id, date=date)
     return {"chunks_per_date": chunks_per_date}
+
+
+@app.get("/api/chunks/{user_id}/dates")
+def api_chunk_dates(user_id: str, request: Request):
+    """
+    Lightweight list of every date the user has chunks on (+counts), for the
+    dashboard's date-filter pills. One cheap aggregate — lets the user reach any
+    historical date on demand without the live feed ever loading all of them.
+    """
+    current_user = get_current_user(request)
+    if not current_user:
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    if current_user["id"] != user_id:
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    return {"dates": get_chunk_dates_for_user(user_id)}
 
 
 @app.delete("/api/chunks/{user_id}/{date}/{filename}")

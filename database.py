@@ -1,7 +1,7 @@
 import os
 import wave
 from datetime import datetime, timedelta, timezone
-from sqlalchemy import create_engine, Column, String, Boolean, DateTime, Text, ForeignKey, UniqueConstraint, Float, Integer, inspect, text, event
+from sqlalchemy import create_engine, Column, String, Boolean, DateTime, Text, ForeignKey, UniqueConstraint, Float, Integer, inspect, text, event, func
 from sqlalchemy.orm import declarative_base, sessionmaker
 
 DB_PATH = os.environ.get("DB_PATH", "/app/db/recordings.db")
@@ -702,34 +702,40 @@ def backfill_durations(batch_size: int = DURATION_BACKFILL_BATCH) -> int:
 DASHBOARD_RECENT_DAYS = int(os.environ.get("DASHBOARD_RECENT_DAYS", "7"))
 
 
-def get_chunks_for_user(discord_id: str) -> dict:
+def get_chunks_for_user(discord_id: str, date: str | None = None) -> dict:
     """
     Returns { "YYYY-MM-DD": [{"filename": "chunk_001.wav", "transcription": "..."}, ...] }
-    ordered date-desc, filename-asc, limited to the last DASHBOARD_RECENT_DAYS days.
-    Includes is_deleted=False rows with status pending/verified.
+    ordered date-desc, filename-asc. Includes is_deleted=False rows with status
+    pending/verified.
+
+    Two modes:
+      • date=None  -> the live dashboard feed: only the last DASHBOARD_RECENT_DAYS
+        days (bounded so the 10s poll stays small no matter how much history piles
+        up — this is what un-hangs the site).
+      • date="YYYY-MM-DD" -> just that one day (window ignored). Used for on-demand
+        browsing of an OLDER date when its filter pill is clicked. One day is a
+        small, fixed slice and is fetched once (not polled), so it can't hang.
 
     Pure read — it does NOT stat the disk per row. A genuinely-missing file just
     means a 404 if that one clip is played; stale-path healing happens lazily on
     the audio route, which builds its path from the request params and so never
-    relies on the stored filepath anyway. Keeping this hot path a single indexed
-    query with no per-row syscalls and no writes is what un-hangs the site.
+    relies on the stored filepath anyway.
     """
-    cutoff = (datetime.now(timezone.utc).date()
-              - timedelta(days=DASHBOARD_RECENT_DAYS)).isoformat()
     with SessionLocal() as db:
-        rows = (
-            db.query(Chunk)
-            .filter(
-                Chunk.discord_id == discord_id,
-                Chunk.is_deleted == False,
-                # Hide both rejected and issue clips — dashboard shows only
-                # pending (awaiting review) and verified (accepted) chunks.
-                Chunk.validation_status.in_(["pending", "verified"]),
-                Chunk.date >= cutoff,
-            )
-            .order_by(Chunk.date.desc(), Chunk.filename.asc())
-            .all()
+        q = db.query(Chunk).filter(
+            Chunk.discord_id == discord_id,
+            Chunk.is_deleted == False,
+            # Hide both rejected and issue clips — dashboard shows only
+            # pending (awaiting review) and verified (accepted) chunks.
+            Chunk.validation_status.in_(["pending", "verified"]),
         )
+        if date is not None:
+            q = q.filter(Chunk.date == date)
+        else:
+            cutoff = (datetime.now(timezone.utc).date()
+                      - timedelta(days=DASHBOARD_RECENT_DAYS)).isoformat()
+            q = q.filter(Chunk.date >= cutoff)
+        rows = q.order_by(Chunk.date.desc(), Chunk.filename.asc()).all()
     result: dict = {}
     for row in rows:
         verified = row.validation_status == "verified"
@@ -743,6 +749,28 @@ def get_chunks_for_user(discord_id: str) -> dict:
             "verified": verified,
         })
     return result
+
+
+def get_chunk_dates_for_user(discord_id: str) -> list:
+    """
+    Every date (newest first) the user has pending/verified chunks on, with a per-
+    date count: [{"date": "YYYY-MM-DD", "count": N}, ...]. One cheap GROUP BY with
+    no per-row work — powers the dashboard's date-filter pills so EVERY date stays
+    reachable even though the live feed only loads the recent window. Pure read.
+    """
+    with SessionLocal() as db:
+        rows = (
+            db.query(Chunk.date, func.count(Chunk.id))
+            .filter(
+                Chunk.discord_id == discord_id,
+                Chunk.is_deleted == False,
+                Chunk.validation_status.in_(["pending", "verified"]),
+            )
+            .group_by(Chunk.date)
+            .order_by(Chunk.date.desc())
+            .all()
+        )
+    return [{"date": d, "count": c} for (d, c) in rows]
 
 
 CLAIM_TIMEOUT_MINUTES = 5

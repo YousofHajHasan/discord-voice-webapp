@@ -257,7 +257,12 @@
 
     // Seed data from server render (fast first paint, no flicker)
     // Shape: { "YYYY-MM-DD": [{ filename, transcription }, ...] }
+    // chunksData = the RECENT live feed (polled). dateList = every date in the
+    // user's history (fetched once, for the pills). extraData = older dates loaded
+    // on demand when their pill is clicked — kept apart from the polled feed.
     let chunksData = JSON.parse(document.getElementById('chunks-seed').textContent);
+    let dateList   = [];
+    const extraData = {};
 
     // ── Chunk players ─────────────────────────────────────────────────────────
     // chunkAudio[date][name] = Audio element
@@ -320,11 +325,14 @@
     // shownCount[date] = number currently shown, or Infinity when "show all" clicked
     const shownCount = {};
 
-    function renderFilterPills(data) {
+    function renderFilterPills() {
         const today  = new Date().toISOString().slice(0, 10);
-        const dates  = Object.keys(data).sort().reverse();
         const filter = document.getElementById('date-filter');
         if (!filter) return;
+        // Union of the full history (dateList) and the recent polled keys, so a
+        // freshly-recorded date gets a pill immediately without re-fetching.
+        const set   = new Set([...dateList.map(x => x.date), ...Object.keys(chunksData)]);
+        const dates = [...set].sort().reverse();
         if (dates.length === 0) { filter.innerHTML = ''; return; }
 
         let html = `<span class="date-pill ${activeFilter === 'all' ? 'active' : ''}"
@@ -337,10 +345,42 @@
         filter.innerHTML = html;
     }
 
-    function setFilter(date) {
+    // Render whatever the current filter selects: the live recent feed for "all",
+    // otherwise the single chosen date from whichever cache holds it.
+    function renderView() {
+        if (activeFilter === 'all') { renderChunks(chunksData); return; }
+        const list = chunksData[activeFilter] || extraData[activeFilter] || [];
+        renderChunks({ [activeFilter]: list });
+    }
+
+    async function setFilter(date) {
         activeFilter = date;
-        renderFilterPills(chunksData);
-        renderChunks(chunksData);
+        renderFilterPills();
+        // An older date isn't in the recent feed — load just that one day on demand.
+        if (date !== 'all' && !chunksData[date] && !extraData[date]) {
+            const section = document.getElementById('chunks-section');
+            if (section) section.innerHTML =
+                `<div style="background:var(--surface);border:1px solid var(--border);border-radius:16px;
+                             padding:24px;text-align:center;color:var(--muted);font-size:13px;">Loading ${date}…</div>`;
+            await loadDate(date);
+            if (activeFilter !== date) return;   // user clicked elsewhere meanwhile
+        }
+        renderView();
+    }
+
+    async function loadDate(date) {
+        try {
+            const res = await fetch('/recordings/api/chunks/' + USER_ID + '?date=' + encodeURIComponent(date));
+            const j   = res.ok ? await res.json() : {};
+            extraData[date] = (j.chunks_per_date && j.chunks_per_date[date]) || [];
+        } catch (e) { extraData[date] = []; }
+    }
+
+    async function loadDates() {
+        try {
+            const res = await fetch('/recordings/api/chunks/' + USER_ID + '/dates');
+            if (res.ok) { dateList = (await res.json()).dates || []; renderFilterPills(); }
+        } catch (e) { /* ignore — pills fall back to the recent keys */ }
     }
 
     function buildChunkRow(date, chunk, idx) {
@@ -478,7 +518,7 @@
         });
 
         section.innerHTML = html;
-        renderFilterPills(data);
+        renderFilterPills();
     }
 
     // ── Live polling ───────────────────────────────────────────────────────────
@@ -486,13 +526,14 @@
         try {
             const res  = await fetch('/recordings/api/chunks/' + USER_ID);
             if (!res.ok) return;
-            const json = await res.json();
-            const fresh = json.chunks_per_date;
+            const fresh = (await res.json()).chunks_per_date;
 
-            const changed = JSON.stringify(fresh) !== JSON.stringify(chunksData);
-            if (changed) {
+            if (JSON.stringify(fresh) !== JSON.stringify(chunksData)) {
                 chunksData = fresh;
-                renderChunks(chunksData);
+                renderFilterPills();
+                // Only refresh the body if we're viewing the live feed — don't
+                // pull the user out of an older date they opened.
+                if (activeFilter === 'all' || chunksData[activeFilter]) renderView();
             }
         } catch (e) { /* ignore network errors */ }
     }
@@ -551,11 +592,12 @@
             delete chunkAudio[date][name];
         }
 
-        if (chunksData[date]) {
-            chunksData[date] = chunksData[date].filter(c => c.filename !== name);
-            if (chunksData[date].length === 0) delete chunksData[date];
+        const cache = chunksData[date] ? chunksData : (extraData[date] ? extraData : null);
+        if (cache) {
+            cache[date] = cache[date].filter(c => c.filename !== name);
+            if (cache[date].length === 0) delete cache[date];
         }
-        renderChunks(chunksData);
+        renderView();
     }
 
     // ── Helpers ────────────────────────────────────────────────────────────────
@@ -565,7 +607,9 @@
     }
 
     // ── Boot ───────────────────────────────────────────────────────────────────
-    renderChunks(chunksData);
+    renderView();
+    renderFilterPills();
+    loadDates();                       // fills the pills with the full history
     setInterval(pollChunks, POLL_MS);
 </script>
 </body>
