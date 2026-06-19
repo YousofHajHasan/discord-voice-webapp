@@ -693,13 +693,29 @@ def backfill_durations(batch_size: int = DURATION_BACKFILL_BATCH) -> int:
     return len(batch)
 
 
+# Dashboard history window. The dashboard and its 10s poll only load chunks from
+# the last N days. Without this bound, a heavy user's poll walked their ENTIRE
+# pending+verified history (100k+ rows) every 10s — synchronously, on the single
+# event-loop thread — which blocked every other request and hung the whole site.
+# Recent-only keeps each poll small and flat no matter how much history piles up.
+# Tunable via env without a code change.
+DASHBOARD_RECENT_DAYS = int(os.environ.get("DASHBOARD_RECENT_DAYS", "7"))
+
+
 def get_chunks_for_user(discord_id: str) -> dict:
     """
     Returns { "YYYY-MM-DD": [{"filename": "chunk_001.wav", "transcription": "..."}, ...] }
-    ordered date-desc, filename-asc.
-    Only includes rows where is_deleted=False AND the file still exists on disk.
-    Heals stale filepaths transparently for rows created before the folder rename.
+    ordered date-desc, filename-asc, limited to the last DASHBOARD_RECENT_DAYS days.
+    Includes is_deleted=False rows with status pending/verified.
+
+    Pure read — it does NOT stat the disk per row. A genuinely-missing file just
+    means a 404 if that one clip is played; stale-path healing happens lazily on
+    the audio route, which builds its path from the request params and so never
+    relies on the stored filepath anyway. Keeping this hot path a single indexed
+    query with no per-row syscalls and no writes is what un-hangs the site.
     """
+    cutoff = (datetime.now(timezone.utc).date()
+              - timedelta(days=DASHBOARD_RECENT_DAYS)).isoformat()
     with SessionLocal() as db:
         rows = (
             db.query(Chunk)
@@ -709,23 +725,23 @@ def get_chunks_for_user(discord_id: str) -> dict:
                 # Hide both rejected and issue clips — dashboard shows only
                 # pending (awaiting review) and verified (accepted) chunks.
                 Chunk.validation_status.in_(["pending", "verified"]),
+                Chunk.date >= cutoff,
             )
             .order_by(Chunk.date.desc(), Chunk.filename.asc())
             .all()
         )
     result: dict = {}
     for row in rows:
-        if _resolve_filepath(row) is not None:
-            verified = row.validation_status == "verified"
-            # Once a chunk is verified, the dashboard shows the human-confirmed
-            # text (what the user saved), not the raw ASR output. Pending chunks
-            # still show the ASR transcription.
-            display = row.verified_transcription if verified else row.transcription
-            result.setdefault(row.date, []).append({
-                "filename": row.filename,
-                "transcription": display,
-                "verified": verified,
-            })
+        verified = row.validation_status == "verified"
+        # Once a chunk is verified, the dashboard shows the human-confirmed
+        # text (what the user saved), not the raw ASR output. Pending chunks
+        # still show the ASR transcription.
+        display = row.verified_transcription if verified else row.transcription
+        result.setdefault(row.date, []).append({
+            "filename": row.filename,
+            "transcription": display,
+            "verified": verified,
+        })
     return result
 
 
